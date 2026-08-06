@@ -1,0 +1,77 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s <host> <port>\n", argv[0]);
+        printf("Example: %s google.com 443\n", argv[0]);
+        return 1;
+    }
+
+    const char *host = argv[1];
+    int port = atoi(argv[2]);
+
+    if (port <= 0 || port > 65535) {
+        printf("Error: Invalid port number (1-65535).\n");
+        return 1;
+    }
+
+    printf("======================\n");
+    printf("[Checking %s:%d...]\n", host, port);
+
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    char port_str[10];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+        printf("[Result: HOST UNRESOLVED]\n");
+        printf("======================\n");
+        return 1;
+    }
+
+    int sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (sockfd < 0) {
+        printf("[Result: SOCKET ERROR]\n");
+        freeaddrinfo(res);
+        printf("======================\n");
+        return 1;
+    }
+
+    struct timeval timeout;
+    timeout.tv_sec = 3;
+    timeout.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+
+    int conn_result = connect(sockfd, res->ai_addr, res->ai_addrlen);
+
+    gettimeofday(&end, NULL);
+
+    double time_ms = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_usec - start.tv_usec) / 1000.0;
+
+    if (conn_result == 0) {
+        printf("[Status: OPEN]\n");
+        printf("[Latency: %.2f ms]\n", time_ms);
+    } else {
+        printf("[Status: CLOSED / TIMEOUT]\n");
+    }
+
+    close(sockfd);
+    freeaddrinfo(res);
+    printf("======================\n");
+
+    return 0;
+}
