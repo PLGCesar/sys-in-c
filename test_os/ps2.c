@@ -39,6 +39,10 @@ static int8_t mouse_packet[3];
 
 static char input_buf[128] = "";
 static size_t input_pos = 0;
+static int ctrl_pressed = 0;
+
+extern void os_handle_keypress(char c);
+extern void os_toggle_cli_mode(void);
 
 static const char scancode_ascii[128] = {
     0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -66,18 +70,26 @@ void ps2_init(void) {
 
 void ps2_keyboard_handler(void) {
     uint8_t scancode = inb(0x60);
-    if (!(scancode & 0x80)) {
+
+    /* Track Left/Right Ctrl Key Press (0x1D) and Release (0x9D) */
+    if (scancode == 0x1D) {
+        ctrl_pressed = 1;
+        return;
+    } else if (scancode == 0x9D) {
+        ctrl_pressed = 0;
+        return;
+    }
+
+    if (!(scancode & 0x80)) { // Key Press
+        // Check Ctrl+V shortcut for OS CLI Mode Toggle
+        if (ctrl_pressed && scancode == 0x2F) { /* 0x2F is 'v' */
+            os_toggle_cli_mode();
+            return;
+        }
+
         char c = scancode_ascii[scancode];
-        if (c == '\b') {
-            if (input_pos > 0) input_buf[--input_pos] = '\0';
-        } else if (c == '\n') {
-            kprintf("\n  \033[1;32m[Keyboard Input Entered]:\033[0m %s\n", input_buf);
-            input_pos = 0;
-            input_buf[0] = '\0';
-        } else if (c && input_pos < sizeof(input_buf) - 1) {
-            input_buf[input_pos++] = c;
-            input_buf[input_pos] = '\0';
-            kprintf("%c", c);
+        if (c) {
+            os_handle_keypress(c);
         }
     }
 }
@@ -127,4 +139,9 @@ kgfx_mouse_t *ps2_get_mouse_state(void) {
 
 const char *ps2_get_input_buffer(void) {
     return input_buf;
+}
+
+void ps2_clear_input_buffer(void) {
+    input_pos = 0;
+    input_buf[0] = '\0';
 }

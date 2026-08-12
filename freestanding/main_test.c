@@ -4,14 +4,30 @@
 #include "kgfx.h"
 #include "kringbuf.h"
 #include "kstring.h"
+#include "klist.h"
+#include "kspinlock.h"
+#include "kvfs.h"
 #include <stdio.h>
 
 static uint8_t kernel_ram_region[1024 * 1024];
-static uint32_t front_video[320 * 200];
-static uint32_t back_ram[320 * 200];
+static uint32_t video_buffer[320 * 200];
+static uint8_t ring_storage[64];
+
+typedef struct {
+    int task_id;
+    klist_node_t node;
+} test_task_t;
+
+static klist_node_t task_list;
+static kspinlock_t smp_lock;
 
 static void test_putchar(char c) {
     putchar(c);
+}
+
+static void vfs_ls_cb(const char *name, size_t size, uint16_t mode) {
+    (void)mode;
+    kprintf("    • %-16s : %u bytes\n", name, (unsigned int)size);
 }
 
 int main(void) {
@@ -24,7 +40,7 @@ int main(void) {
     /* 1. Memory Test (kmem) */
     kmem_init(kernel_ram_region, sizeof(kernel_ram_region));
     uint8_t *page_table = (uint8_t *)kmalloc_aligned(4096, 4096);
-    kprintf("  • kmem: Initialized 1 MB Heap | Page Table: %p\n", (void*)page_table);
+    kprintf("  • kmem: Initialized Heap | Page Table: %p\n", (void*)page_table);
 
     /* 2. Math Test (kfixed) */
     fp32_t a = fp32_from_int(10);
@@ -34,36 +50,47 @@ int main(void) {
     fp32_to_str(div_res, math_buf, sizeof(math_buf), 4);
     kprintf("  • kfixed: Fixed-point 10 / 3 = %s\n", math_buf);
 
-    /* 3. Graphics & Rendering Tech Test (kgfx) */
-    kgfx_double_buffer_t db;
-    kgfx_fb_t back_fb;
-    kgfx_double_buffer_init(&db, front_video, back_ram, 320, 200);
-    kgfx_init(&back_fb, back_ram, 320, 200);
+    /* 3. Intrusive List Test (klist) */
+    klist_init(&task_list);
+    test_task_t task1 = { .task_id = 42 };
+    klist_add_tail(&task_list, &task1.node);
+    test_task_t *retrieved = klist_entry(task_list.next, test_task_t, node);
+    kprintf("  • klist: Intrusive List Entry Task ID = %d\n", retrieved->task_id);
 
-    kgfx_clear(&back_fb, KGFX_DARKGRAY);
+    /* 4. Spinlock & Atomics Test (kspinlock) */
+    kspinlock_init(&smp_lock);
+    kspinlock_lock(&smp_lock);
+    volatile uint32_t counter = 100;
+    katomic_add(&counter, 50);
+    kspinlock_unlock(&smp_lock);
+    kprintf("  • kspinlock: Atomic Add (100 + 50) = %u\n", (unsigned int)counter);
 
-    /* Button and Mouse Test */
-    kgfx_rect_t btn = { .x = 50, .y = 50, .w = 120, .h = 40 };
-    kgfx_mouse_t mouse = { .x = 80, .y = 60, .type = KGFX_CURSOR_NORMAL };
+    /* 5. Ring Buffer Test (kringbuf) */
+    kringbuf_t rb;
+    kringbuf_init(&rb, ring_storage, sizeof(ring_storage));
+    kringbuf_push(&rb, 'A');
+    uint8_t pop_val = 0;
+    kringbuf_pop(&rb, &pop_val);
+    kprintf("  • kringbuf: Popped = %c\n", pop_val);
 
-    if (kgfx_rect_contains(&btn, mouse.x, mouse.y)) {
-        mouse.type = KGFX_CURSOR_CLICKABLE;
-    }
+    /* 6. String Test (kstring) */
+    char parsed_num[32];
+    kitoa(12345, parsed_num, 10, 0);
+    kprintf("  • kstring: kitoa(12345) = %s\n", parsed_num);
 
-    kgfx_draw_rect(&back_fb, btn.x, btn.y, btn.w, btn.h, KGFX_BLUE, 1);
-    kgfx_draw_string(&back_fb, btn.x + 10, btn.y + 15, "Click Me", KGFX_WHITE, KGFX_BLUE);
-    kgfx_draw_cursor(&back_fb, &mouse);
+    /* 7. Graphics Test (kgfx) */
+    kgfx_fb_t fb;
+    kgfx_init(&fb, video_buffer, 320, 200);
+    kgfx_clear(&fb, KGFX_DARKGRAY);
+    kprintf("  • kgfx: Rendered Framebuffer\n");
 
-    /* Swap Buffers */
-    kgfx_swap_buffers(&db);
-    kprintf("  • kgfx: Double Buffering, Dirty Rects & Mouse Map Tested\n");
-
-    /* 4. Formatting Test (kprintf) */
-    kprintf("  • kprintf: Pointer: %p | Hex: 0x%X | Binary: %b\n", 
-            (void*)page_table, 0xDEADC0DE, 0b10110011);
+    /* 8. VFS Test (kvfs / kls) */
+    kvfs_init();
+    kvfs_create_file("test.txt", "Hello VFS", 9, 0644);
+    kprintf("  • kvfs (kls): File Listing:\n");
+    kvfs_list(vfs_ls_cb);
 
     kfree(page_table);
-    kprintf("  • kmem: Free Memory = %u KB\n", (unsigned int)(kmem_get_free_bytes() / 1024));
     kprintf("==========================================\n");
 
     return 0;

@@ -10,5 +10,6 @@ void ps2_mouse_handler(void);
 
 kgfx_mouse_t *ps2_get_mouse_state(void);
 const char *ps2_get_input_buffer(void);
+void ps2_clear_input_buffer(void);
 
 #endif
