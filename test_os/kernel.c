@@ -45,6 +45,14 @@ static void os_putchar(char c) {
             cursor_y += 14;
         }
     }
+
+    /* Screen Scrolling / Reset */
+    if (cursor_y > (int)os_fb.height - 40) {
+        kgfx_clear(&os_fb, (os_mode == 1) ? KGFX_BLACK : KGFX_DARKGRAY);
+        kgfx_draw_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, KGFX_CYAN, 0);
+        cursor_y = 40;
+        cursor_x = 30;
+    }
 }
 
 void os_draw_mouse_cursor(void) {

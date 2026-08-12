@@ -138,7 +138,7 @@ static double evaluate_expression(const char *raw_input) {
         else if (c == 0xC3 && (unsigned char)raw_input[i+1] == 0xB7) {
             clean_buf[j++] = '/'; i++;
         }
-        else if (c == 0xE2 && raw_input[i+1] != '\0' && raw_input[i+2] != '\0' && (unsigned char)raw_input[i+1] == 0x88 && (unsigned char)raw_input[i+2] == 0x9A) {
+        else if (c == 0xE2 && (unsigned char)raw_input[i+1] == 0x88 && (unsigned char)raw_input[i+2] == 0x9A) {
             clean_buf[j++] = 'r'; i += 2;
         }
         else clean_buf[j++] = (char)c;

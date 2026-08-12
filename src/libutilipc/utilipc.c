@@ -33,17 +33,17 @@ int utilipc_init(void) {
     int created = 0;
     const char *path = get_shm_path();
 
-    shm_fd = open(path, O_CREAT | O_RDWR, 0666);
-    if (shm_fd < 0) return -1;
-
-    struct stat st;
-    if (fstat(shm_fd, &st) == 0 && st.st_size == 0) {
+    shm_fd = open(path, O_CREAT | O_EXCL | O_RDWR, 0666);
+    if (shm_fd >= 0) {
+        created = 1;
         if (ftruncate(shm_fd, sizeof(utilipc_shm_t)) < 0) {
             close(shm_fd);
             shm_fd = -1;
             return -1;
         }
-        created = 1;
+    } else {
+        shm_fd = open(path, O_RDWR);
+        if (shm_fd < 0) return -1;
     }
 
     shm_ptr = mmap(NULL, sizeof(utilipc_shm_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);

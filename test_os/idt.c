@@ -66,16 +66,17 @@ void isr_handler(registers_t *regs) {
     if (regs->int_no == 0) {
         static int div_caught = 0;
         if (!div_caught) {
-            kprintf("\n  [IDT EXCEPTION 0]: Divide-by-Zero Exception Caught Safely!\n");
+            kprintf("\n  [IDT EXCEPTION 0]: Divide-by-Zero Exception Caught!\n");
+            kprintf("  [System Halted to prevent cascading faults]\n");
             div_caught = 1;
         }
-        regs->eip += 3; /* Advance past failing idiv instruction */
+        __asm__ __volatile__("cli; hlt");
     } else if (regs->int_no == 13) {
         kprintf("\n  [IDT EXCEPTION 13]: General Protection Fault (GPF) Caught!\n");
-        regs->eip += 2;
+        __asm__ __volatile__("cli; hlt");
     } else if (regs->int_no == 14) {
         kprintf("\n  [IDT EXCEPTION 14]: Page Fault Caught!\n");
-        regs->eip += 2;
+        __asm__ __volatile__("cli; hlt");
     } else if (regs->int_no == 33) {
         ps2_keyboard_handler();
         outb(0x20, 0x20); /* Send PIC EOI */
