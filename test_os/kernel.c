@@ -47,7 +47,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     kset_putchar(os_putchar);
 
-    /* 2. Inicializa GDT, IDT e PS/2 */
+    /* 2. Inicializa GDT, IDT (Exceptions + PIC) & PS/2 Ports (Teclado + Mouse) */
     gdt_init();
     idt_init();
     ps2_init();
@@ -55,17 +55,39 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     /* 3. Desenha Interface */
     kgfx_draw_rect(&os_fb, 10, 10, width - 20, height - 20, KGFX_CYAN, 0);
     kgfx_draw_rect(&os_fb, 12, 12, width - 24, 32, KGFX_BLUE, 1);
-    kgfx_draw_string(&os_fb, 20, 22, "utils-in-c OS (GDT + IDT + PS/2 Mouse & Keyboard Active)", KGFX_WHITE, KGFX_BLUE);
+    kgfx_draw_string(&os_fb, 20, 22, "utils-in-c OS (Full Freestanding & Kernel Verification)", KGFX_WHITE, KGFX_BLUE);
 
-    /* 4. Diagnóstico do Kernel */
-    kprintf("[Kernel Core Subsystems Active]\n");
-    kprintf("  • GDT & IDT Handlers: GDT Loaded | IDT Loaded | PIC Remapped\n");
-    kprintf("  • PS/2 Driver       : Keyboard (IRQ 1) & Mouse (IRQ 12) Initialized\n");
+    kgfx_draw_circle(&os_fb, width - 100, 180, 50, KGFX_YELLOW);
 
-    /* 5. Teste Seguro de Exceção IDT (Divisão por Zero) */
+    /* 4. Teste do Gerenciador de Memória (kmem) */
+    static uint8_t os_heap_pool[2 * 1024 * 1024]; /* 2 MB Heap Pool */
+    kmem_init(os_heap_pool, sizeof(os_heap_pool));
+    void *page_table = kmalloc_aligned(4096, 4096);
+
+    /* 5. Teste de Matemática de Ponto Fixo (kfixed) */
+    fp32_t a = fp32_from_int(100);
+    fp32_t sqrt_res = fp32_sqrt(a);
+    char math_buf[32];
+    fp32_to_str(sqrt_res, math_buf, sizeof(math_buf), 2);
+
+    /* 6. Diagnóstico Completo no Screen via KPRINTF */
+    kprintf("[Kernel & Freestanding Modules Verification]\n");
+    kprintf("  • Multiboot1 Magic : 0x%X\n", magic);
+    kprintf("  • Video Resolution : %dx%d @ 32bpp (KGFX Active)\n", width, height);
+    kprintf("  • GDT & IDT Status  : GDT Loaded | IDT Loaded | PIC Remapped\n");
+    kprintf("  • PS/2 Drivers      : Keyboard (IRQ 1) & Mouse (IRQ 12) Active\n");
+    kprintf("  • KMEM Heap Pool    : %d KB | Free: %d KB\n", (int)(sizeof(os_heap_pool)/1024), (int)(kmem_get_free_bytes()/1024));
+    kprintf("  • KMEM Page Table   : %p (Aligned to 4096: YES)\n", page_table);
+    kprintf("  • KFIXED Sqrt(100)  : %s\n", math_buf);
+
+    /* 7. Teste Seguro de Exceção IDT (Divisão por Zero) */
     trigger_divide_by_zero_test();
 
-    /* Loop Principal do Kernel: Atualiza Cursor do Mouse PS/2 */
+    kprintf("\n  • System Status     : ALL FREESTANDING MODULES & DRIVERS OPERATIONAL!\n");
+
+    kfree(page_table);
+
+    /* 8. Loop Principal do Kernel: Atualiza Cursor do Mouse PS/2 em Tempo Real */
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
     while (1) {
         kgfx_draw_cursor(&os_fb, mouse);

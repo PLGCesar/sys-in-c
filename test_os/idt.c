@@ -61,17 +61,25 @@ extern void ps2_mouse_handler(void);
 
 void isr_handler(registers_t *regs) {
     if (regs->int_no == 0) {
-        kprintf("\n  \033[1;31m[IDT EXCEPTION 0]: Divide-by-Zero Exception Caught Safely!\033[0m\n");
+        static int div_caught = 0;
+        if (!div_caught) {
+            kprintf("\n  • \033[1;31m[IDT EXCEPTION 0]: Divide-by-Zero Exception Caught Safely!\033[0m\n");
+            div_caught = 1;
+        }
+        /* Avança o EIP em 3 bytes para pular a instrução 'idiv' com falha e evitar loop infinito */
+        regs->eip += 3;
     } else if (regs->int_no == 13) {
-        kprintf("\n  \033[1;31m[IDT EXCEPTION 13]: General Protection Fault (GPF) Caught!\033[0m\n");
+        kprintf("\n  • \033[1;31m[IDT EXCEPTION 13]: General Protection Fault (GPF) Caught!\033[0m\n");
+        regs->eip += 2;
     } else if (regs->int_no == 14) {
-        kprintf("\n  \033[1;31m[IDT EXCEPTION 14]: Page Fault Caught!\033[0m\n");
+        kprintf("\n  • \033[1;31m[IDT EXCEPTION 14]: Page Fault Caught!\033[0m\n");
+        regs->eip += 2;
     } else if (regs->int_no == 33) {
         ps2_keyboard_handler();
-        outb(0x20, 0x20);
+        outb(0x20, 0x20); /* EOI Master */
     } else if (regs->int_no == 44) {
         ps2_mouse_handler();
-        outb(0xA0, 0x20);
-        outb(0x20, 0x20);
+        outb(0xA0, 0x20); /* EOI Slave */
+        outb(0x20, 0x20); /* EOI Master */
     }
 }
