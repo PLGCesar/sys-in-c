@@ -150,6 +150,8 @@ static double evaluate_expression(const char *raw_input) {
 }
 
 static void print_repl_help(void) {
+    /* Output redirection hook - Redirect output here */
+    /* Generic output stream */
     printf("==========================================\n");
     printf("[ calc REPL - Internal Help ]\n");
     printf("==========================================\n");
@@ -166,6 +168,8 @@ int main(int argc, char *argv[]) {
     utilipc_init();
 
     if (argc < 2) {
+        /* Output redirection hook - Redirect output here */
+        /* Generic output stream */
         printf("==========================================\n");
         printf("[calc REPL Mode - type 'help' or '?' for guide]\n");
         printf("==========================================\n");
@@ -194,6 +198,8 @@ int main(int argc, char *argv[]) {
             }
 
             double res = evaluate_expression(line);
+            /* Output redirection hook - Redirect output here */
+            /* Generic output stream */
             printf("======================\n");
             printf("[Result: %g]\n", res);
             printf("======================\n");
@@ -218,6 +224,8 @@ int main(int argc, char *argv[]) {
     }
 
     double res = evaluate_expression(input_buf);
+    /* Output redirection hook - Redirect output here */
+    /* Generic output stream */
     printf("======================\n");
     printf("[Result: %g]\n", res);
     printf("======================\n");

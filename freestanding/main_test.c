@@ -1,46 +1,43 @@
 #include "kmem.h"
+#include "kfixed.h"
+#include "kprintf.h"
 #include <stdio.h>
 
-// Arena de memória estática de 1 MB (sem libc malloc)
-static uint8_t my_freestanding_heap[1024 * 1024];
+static uint8_t kernel_ram_region[1024 * 1024];
+
+/* Standard output wrapper hook for testing */
+static void test_putchar(char c) {
+    putchar(c);
+}
 
 int main(void) {
-    printf("==========================================\n");
-    printf("[ Freestanding Memory Manager Test ]\n");
-    printf("==========================================\n");
+    /* Bind kprintf output hook to standard test putchar */
+    kset_putchar(test_putchar);
 
-    // 1. Inicializa o heap de 1 MB
-    kmem_init(my_freestanding_heap, sizeof(my_freestanding_heap));
-    printf("  • Heap Initialized : %zu KB\n", sizeof(my_freestanding_heap) / 1024);
-    printf("  • Free Memory      : %zu bytes\n", kmem_get_free_bytes());
+    kprintf("==========================================\n");
+    kprintf("[ OS Kernel Freestanding Subsystem Test ]\n");
+    kprintf("==========================================\n");
 
-    // 2. Teste de kmalloc (malloc)
-    int *numbers = (int *)malloc(10 * sizeof(int));
-    if (numbers) {
-        for (int i = 0; i < 10; i++) numbers[i] = (i + 1) * 10;
-        printf("  • kmalloc Allocated 10 ints. First: %d, Last: %d\n", numbers[0], numbers[9]);
-    }
+    /* 1. Memory Test (kmem) */
+    kmem_init(kernel_ram_region, sizeof(kernel_ram_region));
+    uint8_t *page_table = (uint8_t *)kmalloc_aligned(4096, 4096);
+    kprintf("  • kmem: Initialized 1 MB Heap | Page Table: %p\n", (void*)page_table);
 
-    char *text = (char *)malloc(64);
-    if (text) {
-        kmemcpy(text, "Hello Freestanding C!", 22);
-        printf("  • kmalloc String    : %s\n", text);
-    }
+    /* 2. Math Test (kfixed) */
+    fp32_t a = fp32_from_int(10);
+    fp32_t b = fp32_from_int(3);
+    fp32_t div_res = fp32_div(a, b);
+    char math_buf[32];
+    fp32_to_str(div_res, math_buf, sizeof(math_buf), 4);
+    kprintf("  • kfixed: Fixed-point 10 / 3 = %s\n", math_buf);
 
-    printf("  • Used Memory      : %zu bytes\n", kmem_get_used_bytes());
+    /* 3. Formatting Test (kprintf) */
+    kprintf("  • kprintf: Pointer: %p | Hex: 0x%X | Binary: %b\n", 
+            (void*)page_table, 0xDEADC0DE, 0b10110011);
 
-    // 3. Teste de krealloc (realloc)
-    numbers = (int *)realloc(numbers, 20 * sizeof(int));
-    if (numbers) {
-        numbers[19] = 999;
-        printf("  • krealloc Expanded : New last element = %d\n", numbers[19]);
-    }
-
-    // 4. Teste de kfree (free) + Coalescência
-    kfree(numbers);
-    kfree(text);
-    printf("  • After kfree      : Free Memory = %zu bytes\n", kmem_get_free_bytes());
-    printf("==========================================\n");
+    kfree(page_table);
+    kprintf("  • kmem: Free Memory = %u KB\n", (unsigned int)(kmem_get_free_bytes() / 1024));
+    kprintf("==========================================\n");
 
     return 0;
 }
