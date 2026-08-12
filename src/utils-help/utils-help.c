@@ -21,6 +21,10 @@ static void print_general_help(void) {
     printf("  strutils   - String case converter, URL encoder, ROT13, and stats\n");
     printf("  fdup       - Fast duplicate file finder using 2-stage size & SHA256 hashing\n");
     printf("  deview     - TUI Nano-style read-only inspector (Hexadecimal, Binary, Decoded)\n");
+    printf("  cpuplot    - Animated live terminal graph for CPU and RAM load\n");
+    printf("  qrcli      - ASCII QR Code generator for URLs, strings, and Wi-Fi\n");
+    printf("  bench      - Hardware micro-benchmark for CPU MOPs and RAM MB/s\n");
+    printf("  get-info   - Hardware intelligence for phones, PC parts & bottleneck shell\n");
     printf("======================\n");
     printf("Type 'utils-help <command>' for detailed help on a command.\n");
     printf("======================\n");

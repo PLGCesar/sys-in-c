@@ -4,7 +4,7 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview utils-help
+TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help
 
 all: $(LIB_IPC) $(TOOLS)
 
@@ -59,11 +59,23 @@ fdup: src/fdup/fdup.c $(LIB_IPC)
 deview: src/deview/deview.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/deview/deview.c -o deview $(LDFLAGS_IPC)
 
+cpuplot: src/cpuplot/cpuplot.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/cpuplot/cpuplot.c -o cpuplot $(LDFLAGS_IPC)
+
+qrcli: src/qrcli/qrcli.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/qrcli/qrcli.c -o qrcli $(LDFLAGS_IPC)
+
+bench: src/bench/bench.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/bench/bench.c -o bench $(LDFLAGS_IPC)
+
+get-info: src/get-info/get-info.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/get-info/get-info.c -o get-info $(LDFLAGS_IPC)
+
 utils-help: src/utils-help/utils-help.c
 	$(CC) $(CFLAGS) src/utils-help/utils-help.c -o utils-help
 
-free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/main_test.c freestanding/kcalc.c
-	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/main_test.c -o freestanding_test
+free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/main_test.c freestanding/kcalc.c
+	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/main_test.c -o freestanding_test
 	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kcalc.c -o kcalc
 
 install: all

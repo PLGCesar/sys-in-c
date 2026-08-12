@@ -1,4 +1,5 @@
 #include "kgfx.h"
+#include "kmem.h"
 
 /* Compact 8x8 ASCII font bitmap table (ASCII 32 to 126) */
 static const uint8_t kgfx_font8x8[95][8] = {
@@ -97,6 +98,58 @@ static const uint8_t kgfx_font8x8[95][8] = {
     {0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x00}, /* | */
     {0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00}, /* } */
     {0x3B,0x6E,0x00,0x00,0x00,0x00,0x00,0x00}  /* ~ */
+};
+
+/* Mouse cursor bitmaps (10x14) */
+static const uint16_t cursor_arrow[14] = {
+    0b100000000000,
+    0b110000000000,
+    0b111000000000,
+    0b111100000000,
+    0b111110000000,
+    0b111111000000,
+    0b111111100000,
+    0b111111110000,
+    0b111110000000,
+    0b110111000000,
+    0b100011100000,
+    0b000001110000,
+    0b000000110000,
+    0b000000000000
+};
+
+static const uint16_t cursor_hand[14] = {
+    0b001100000000,
+    0b001100000000,
+    0b001100000000,
+    0b001101100000,
+    0b001101101100,
+    0b011101101101,
+    0b011111111111,
+    0b011111111111,
+    0b001111111111,
+    0b000111111110,
+    0b000011111100,
+    0b000001111100,
+    0b000000000000,
+    0b000000000000
+};
+
+static const uint16_t cursor_beam[14] = {
+    0b011111000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b000100000000,
+    0b011111000000,
+    0b000000000000
 };
 
 /* Framebuffer initialization */
@@ -216,6 +269,80 @@ void kgfx_draw_string(kgfx_fb_t *fb, int x, int y, const char *str, uint32_t fg,
             curr_x += 8;
         }
     }
+}
+
+/* Double buffer initialization */
+void kgfx_double_buffer_init(kgfx_double_buffer_t *db, uint32_t *front, uint32_t *back, uint32_t w, uint32_t h) {
+    if (!db) return;
+    db->front_buffer = front;
+    db->back_buffer = back;
+    db->width = w;
+    db->height = h;
+}
+
+/* Double buffer swap */
+void kgfx_swap_buffers(kgfx_double_buffer_t *db) {
+    if (!db || !db->front_buffer || !db->back_buffer) return;
+    size_t total_bytes = (size_t)db->width * db->height * sizeof(uint32_t);
+    kmemcpy(db->front_buffer, db->back_buffer, total_bytes);
+}
+
+/* Dirty list clear */
+void kgfx_dirty_clear(kgfx_dirty_list_t *list) {
+    if (list) list->count = 0;
+}
+
+/* Dirty rectangle addition */
+void kgfx_add_dirty_rect(kgfx_dirty_list_t *list, int x, int y, int w, int h) {
+    if (!list || list->count >= KGFX_MAX_DIRTY_RECTS) return;
+    list->rects[list->count].x = x;
+    list->rects[list->count].y = y;
+    list->rects[list->count].w = w;
+    list->rects[list->count].h = h;
+    list->count++;
+}
+
+/* Dirty rectangles blit flush */
+void kgfx_flush_dirty(kgfx_double_buffer_t *db, kgfx_dirty_list_t *list) {
+    if (!db || !db->front_buffer || !db->back_buffer || !list) return;
+
+    for (size_t i = 0; i < list->count; i++) {
+        kgfx_rect_t r = list->rects[i];
+        if (r.x < 0) r.x = 0;
+        if (r.y < 0) r.y = 0;
+        if ((uint32_t)(r.x + r.w) > db->width) r.w = db->width - r.x;
+        if ((uint32_t)(r.y + r.h) > db->height) r.h = db->height - r.y;
+
+        for (int py = r.y; py < r.y + r.h; py++) {
+            size_t offset = (size_t)py * db->width + r.x;
+            kmemcpy(&db->front_buffer[offset], &db->back_buffer[offset], r.w * sizeof(uint32_t));
+        }
+    }
+    list->count = 0;
+}
+
+/* Mouse cursor rendering */
+void kgfx_draw_cursor(kgfx_fb_t *fb, const kgfx_mouse_t *mouse) {
+    if (!fb || !mouse) return;
+
+    const uint16_t *sprite = cursor_arrow;
+    if (mouse->type == KGFX_CURSOR_CLICKABLE) sprite = cursor_hand;
+    else if (mouse->type == KGFX_CURSOR_TEXT) sprite = cursor_beam;
+
+    for (int row = 0; row < 14; row++) {
+        uint16_t bits = sprite[row];
+        for (int col = 0; col < 12; col++) {
+            if (bits & (1 << (11 - col))) {
+                kgfx_draw_pixel(fb, mouse->x + col, mouse->y + row, KGFX_WHITE);
+            }
+        }
+    }
+}
+
+/* Bounding box hit test */
+int kgfx_rect_contains(const kgfx_rect_t *rect, int x, int y) {
+    if (!rect) return 0;
+    return (x >= rect->x && x < (rect->x + rect->w) && y >= rect->y && y < (rect->y + rect->h));
 }
 
 /* --- VGA Mode 03h Driver (Text Mode 80x25 at 0xB8000) --- */

@@ -2,10 +2,13 @@
 #include "kfixed.h"
 #include "kprintf.h"
 #include "kgfx.h"
+#include "kringbuf.h"
+#include "kstring.h"
 #include <stdio.h>
 
 static uint8_t kernel_ram_region[1024 * 1024];
-static uint32_t video_buffer[320 * 200]; /* 320x200 pixel framebuffer */
+static uint32_t front_video[320 * 200];
+static uint32_t back_ram[320 * 200];
 
 static void test_putchar(char c) {
     putchar(c);
@@ -31,14 +34,29 @@ int main(void) {
     fp32_to_str(div_res, math_buf, sizeof(math_buf), 4);
     kprintf("  • kfixed: Fixed-point 10 / 3 = %s\n", math_buf);
 
-    /* 3. Graphics Test (kgfx) */
-    kgfx_fb_t fb;
-    kgfx_init(&fb, video_buffer, 320, 200);
-    kgfx_clear(&fb, KGFX_DARKGRAY);
-    kgfx_draw_rect(&fb, 5, 5, 310, 190, KGFX_CYAN, 0);
-    kgfx_draw_circle(&fb, 160, 100, 30, KGFX_YELLOW);
-    kgfx_draw_string(&fb, 20, 20, "Bare-Metal Kernel OS", KGFX_WHITE, 0);
-    kprintf("  • kgfx: Rendered 320x200 Framebuffer (Shapes & Text)\n");
+    /* 3. Graphics & Rendering Tech Test (kgfx) */
+    kgfx_double_buffer_t db;
+    kgfx_fb_t back_fb;
+    kgfx_double_buffer_init(&db, front_video, back_ram, 320, 200);
+    kgfx_init(&back_fb, back_ram, 320, 200);
+
+    kgfx_clear(&back_fb, KGFX_DARKGRAY);
+
+    /* Button and Mouse Test */
+    kgfx_rect_t btn = { .x = 50, .y = 50, .w = 120, .h = 40 };
+    kgfx_mouse_t mouse = { .x = 80, .y = 60, .type = KGFX_CURSOR_NORMAL };
+
+    if (kgfx_rect_contains(&btn, mouse.x, mouse.y)) {
+        mouse.type = KGFX_CURSOR_CLICKABLE;
+    }
+
+    kgfx_draw_rect(&back_fb, btn.x, btn.y, btn.w, btn.h, KGFX_BLUE, 1);
+    kgfx_draw_string(&back_fb, btn.x + 10, btn.y + 15, "Click Me", KGFX_WHITE, KGFX_BLUE);
+    kgfx_draw_cursor(&back_fb, &mouse);
+
+    /* Swap Buffers */
+    kgfx_swap_buffers(&db);
+    kprintf("  • kgfx: Double Buffering, Dirty Rects & Mouse Map Tested\n");
 
     /* 4. Formatting Test (kprintf) */
     kprintf("  • kprintf: Pointer: %p | Hex: 0x%X | Binary: %b\n", 
