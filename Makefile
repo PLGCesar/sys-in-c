@@ -1,30 +1,61 @@
 PREFIX ?= /usr/local
 CC ?= gcc
+CFLAGS ?= -Wall -Wextra -O2 -fPIC
+LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
-all: calc passgen bigfiles portcheck utils-help
+LIB_IPC = libutilipc.so
+TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon utils-help
 
-calc: src/calc/calc.c
-	$(CC) $(CFLAGS) src/calc/calc.c -o calc -lm
+all: $(LIB_IPC) $(TOOLS)
 
-passgen: src/passgen/passgen.c
-	$(CC) $(CFLAGS) src/passgen/passgen.c -o passgen
+$(LIB_IPC): src/libutilipc/utilipc.c
+	$(CC) $(CFLAGS) -shared src/libutilipc/utilipc.c -o $(LIB_IPC) -lpthread
 
-bigfiles: src/bigfiles/bigfiles.c
-	$(CC) $(CFLAGS) src/bigfiles/bigfiles.c -o bigfiles
+calc: src/calc/calc.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/calc/calc.c -o calc $(LDFLAGS_IPC) -lm
 
-portcheck: src/portcheck/portcheck.c
-	$(CC) $(CFLAGS) src/portcheck/portcheck.c -o portcheck
+passgen: src/passgen/passgen.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/passgen/passgen.c -o passgen $(LDFLAGS_IPC)
+
+bigfiles: src/bigfiles/bigfiles.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/bigfiles/bigfiles.c -o bigfiles $(LDFLAGS_IPC)
+
+portcheck: src/portcheck/portcheck.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/portcheck/portcheck.c -o portcheck $(LDFLAGS_IPC)
+
+hashcalc: src/hashcalc/hashcalc.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/hashcalc/hashcalc.c -o hashcalc $(LDFLAGS_IPC)
+
+b64: src/b64/b64.c
+	$(CC) $(CFLAGS) src/b64/b64.c -o b64
+
+sysinfo: src/sysinfo/sysinfo.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/sysinfo/sysinfo.c -o sysinfo $(LDFLAGS_IPC)
+
+org: src/org/org.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/org/org.c -o org $(LDFLAGS_IPC)
+
+netinfo: src/netinfo/netinfo.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/netinfo/netinfo.c -o netinfo $(LDFLAGS_IPC)
+
+ffind: src/ffind/ffind.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/ffind/ffind.c -o ffind $(LDFLAGS_IPC)
+
+ipcmon: src/ipcmon/ipcmon.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/ipcmon/ipcmon.c -o ipcmon $(LDFLAGS_IPC)
 
 utils-help: src/utils-help/utils-help.c
 	$(CC) $(CFLAGS) src/utils-help/utils-help.c -o utils-help
 
-install:
-	install -d $(PREFIX)/bin
-	install -m 755 calc $(PREFIX)/bin/calc
-	install -m 755 passgen $(PREFIX)/bin/passgen
-	install -m 755 bigfiles $(PREFIX)/bin/bigfiles
-	install -m 755 portcheck $(PREFIX)/bin/portcheck
-	install -m 755 utils-help $(PREFIX)/bin/utils-help
+install: all
+	install -d $(DESTDIR)$(PREFIX)/lib
+	install -m 755 $(LIB_IPC) $(DESTDIR)$(PREFIX)/lib/$(LIB_IPC)
+	install -d $(DESTDIR)$(PREFIX)/bin
+	for tool in $(TOOLS); do \
+		install -m 755 $$tool $(DESTDIR)$(PREFIX)/bin/$$tool; \
+	done
 
 clean:
-	rm -f calc passgen bigfiles portcheck utils-help
+	rm -f $(TOOLS) $(LIB_IPC)
+
+.PHONY: all install clean
