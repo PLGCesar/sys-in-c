@@ -62,8 +62,8 @@ deview: src/deview/deview.c $(LIB_IPC)
 utils-help: src/utils-help/utils-help.c
 	$(CC) $(CFLAGS) src/utils-help/utils-help.c -o utils-help
 
-free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/main_test.c freestanding/kcalc.c
-	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/main_test.c -o freestanding_test
+free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/main_test.c freestanding/kcalc.c
+	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/main_test.c -o freestanding_test
 	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kcalc.c -o kcalc
 
 install: all

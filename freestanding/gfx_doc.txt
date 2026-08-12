@@ -1,0 +1,73 @@
+===============================================================================
+               FREESTANDING BARE-METAL GRAPHICS (KGFX)
+===============================================================================
+
+1. OVERVIEW
+-------------------------------------------------------------------------------
+KGFX is a zero-dependency 32-bit ARGB software rendering library designed for 
+OS kernels, bootloader splash screens, VBE/GOP video buffers, and bare-metal 
+embedded display systems.
+
+It operates directly on raw pixel memory buffers without X11, Wayland, SDL,
+or hardware GPU acceleration.
+
+
+2. PIXEL FORMAT & COLOR DEFINITIONS
+-------------------------------------------------------------------------------
+- Format: 32-bit ARGB / XRGB (0xAARRGGBB)
+- Predefined Colors: KGFX_BLACK, KGFX_WHITE, KGFX_RED, KGFX_GREEN, 
+  KGFX_BLUE, KGFX_YELLOW, KGFX_CYAN, KGFX_MAGENTA, KGFX_DARKGRAY.
+
+
+3. API SPECIFICATION
+-------------------------------------------------------------------------------
+
+A. INITIALIZATION & CLEARING
+   - void kgfx_init(kgfx_fb_t *fb, uint32_t *buffer, uint32_t width, uint32_t height);
+     Initializes a framebuffer descriptor over a raw pixel memory buffer.
+
+   - void kgfx_clear(kgfx_fb_t *fb, uint32_t color);
+     Fills the entire framebuffer with a solid 32-bit color.
+
+B. GRAPHICS PRIMITIVES
+   - void kgfx_draw_pixel(kgfx_fb_t *fb, int x, int y, uint32_t color);
+   - void kgfx_draw_line(kgfx_fb_t *fb, int x0, int y0, int x1, int y1, uint32_t color);
+   - void kgfx_draw_rect(kgfx_fb_t *fb, int x, int y, int w, int h, uint32_t color, int fill);
+   - void kgfx_draw_circle(kgfx_fb_t *fb, int cx, int cy, int r, uint32_t color);
+
+C. TEXT & ASCII RENDERING
+   - void kgfx_draw_char(kgfx_fb_t *fb, int x, int y, char c, uint32_t fg, uint32_t bg);
+   - void kgfx_draw_string(kgfx_fb_t *fb, int x, int y, const char *str, uint32_t fg, uint32_t bg);
+     Renders text anywhere on screen using an embedded 8x8 ASCII font bitmap table.
+
+D. OPTIONAL HARDWARE DRIVERS (VGA MODE 03H & UART SERIAL)
+   - Embedded commented drivers for legacy VGA Text Mode 03h (80x25 at 0xB8000)
+     and COM1 UART Serial Port (0x3F8) are available in kgfx.h / kgfx.c.
+
+
+4. BARE-METAL USAGE EXAMPLE
+-------------------------------------------------------------------------------
+
+#include "kgfx.h"
+
+/* Example 320x240 pixel memory framebuffer */
+static uint32_t video_memory[320 * 240];
+
+void kernel_gui_demo(void) {
+    kgfx_fb_t fb;
+
+    /* Step 1: Initialize Framebuffer */
+    kgfx_init(&fb, video_memory, 320, 240);
+
+    /* Step 2: Clear screen to dark gray */
+    kgfx_clear(&fb, KGFX_DARKGRAY);
+
+    /* Step 3: Draw shapes */
+    kgfx_draw_rect(&fb, 10, 10, 300, 220, KGFX_BLUE, 0);  /* Border */
+    kgfx_draw_circle(&fb, 160, 120, 40, KGFX_YELLOW);      /* Circle */
+
+    /* Step 4: Render text with embedded 8x8 font */
+    kgfx_draw_string(&fb, 20, 20, "Bare-Metal Kernel OS Active!", KGFX_WHITE, 0);
+}
+
+===============================================================================

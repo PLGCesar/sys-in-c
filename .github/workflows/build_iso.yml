@@ -1,0 +1,53 @@
+name: Build Kernel ISO
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc gcc-multilib binutils grub-pc-bin grub-common xorriso mtools
+
+      - name: Build Kernel Binary and ISO
+        run: |
+          # Compila o Bootloader em Assembly
+          gcc -m32 -c test_os/boot.s -o test_os/boot.o
+
+          # Compila os módulos Freestanding em C para 32-bit Multiboot1
+          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kmem.c -o test_os/kmem.o
+          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kfixed.c -o test_os/kfixed.o
+          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kprintf.c -o test_os/kprintf.o
+          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kgfx.c -o test_os/kgfx.o
+          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c test_os/kernel.c -o test_os/kernel.o
+
+          # Linka o Binário do Kernel
+          ld -m elf_i386 -T test_os/linker.ld test_os/boot.o test_os/kmem.o test_os/kfixed.o test_os/kprintf.o test_os/kgfx.o test_os/kernel.o -o test_os/myos.bin
+
+          # Verifica se o binário cumpre a especificação Multiboot1
+          grub-file --is-x86-multiboot test_os/myos.bin
+
+          # Prepara a estrutura do GRUB para a ISO
+          mkdir -p isodir/boot/grub
+          cp test_os/myos.bin isodir/boot/myos.bin
+          cp test_os/grub.cfg isodir/boot/grub/grub.cfg
+
+          # Gera a Imagem ISO Bootável
+          grub-mkrescue -o test_os.iso isodir
+
+      - name: Upload ISO Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test_os-bootable-iso
+          path: test_os.iso
