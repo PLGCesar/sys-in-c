@@ -32,8 +32,8 @@ jobs:
           gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kgfx.c -o test_os/kgfx.o
           gcc -m32 -ffreestanding -O2 -Wall -Wextra -c test_os/kernel.c -o test_os/kernel.o
 
-          # Linka o Binário do Kernel
-          ld -m elf_i386 -T test_os/linker.ld test_os/boot.o test_os/kmem.o test_os/kfixed.o test_os/kprintf.o test_os/kgfx.o test_os/kernel.o -o test_os/myos.bin
+          # Linka o Binário do Kernel com libgcc para suporte a matemática 64-bit em 32-bit
+          gcc -m32 -ffreestanding -nostdlib -T test_os/linker.ld test_os/boot.o test_os/kmem.o test_os/kfixed.o test_os/kprintf.o test_os/kgfx.o test_os/kernel.o -o test_os/myos.bin -lgcc
 
           # Verifica se o binário cumpre a especificação Multiboot1
           grub-file --is-x86-multiboot test_os/myos.bin
