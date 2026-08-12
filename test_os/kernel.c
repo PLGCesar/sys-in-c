@@ -1,6 +1,7 @@
 #include "multiboot.h"
 #include "idt.h"
 #include "ps2.h"
+#include "gdt.h"
 #include "../freestanding/kmem.h"
 #include "../freestanding/kfixed.h"
 #include "../freestanding/kprintf.h"
