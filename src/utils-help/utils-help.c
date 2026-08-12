@@ -20,6 +20,7 @@ static void print_general_help(void) {
     printf("  watchcmd   - Command loop runner/monitor\n");
     printf("  strutils   - String case converter, URL encoder, ROT13, and stats\n");
     printf("  fdup       - Fast duplicate file finder using 2-stage size & SHA256 hashing\n");
+    printf("  deview     - TUI Nano-style read-only inspector (Hexadecimal, Binary, Decoded)\n");
     printf("======================\n");
     printf("Type 'utils-help <command>' for detailed help on a command.\n");
     printf("======================\n");

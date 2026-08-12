@@ -4,7 +4,7 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup utils-help
+TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview utils-help
 
 all: $(LIB_IPC) $(TOOLS)
 
@@ -55,6 +55,9 @@ strutils: src/strutils/strutils.c $(LIB_IPC)
 
 fdup: src/fdup/fdup.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/fdup/fdup.c -o fdup $(LDFLAGS_IPC)
+
+deview: src/deview/deview.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/deview/deview.c -o deview $(LDFLAGS_IPC)
 
 utils-help: src/utils-help/utils-help.c
 	$(CC) $(CFLAGS) src/utils-help/utils-help.c -o utils-help
