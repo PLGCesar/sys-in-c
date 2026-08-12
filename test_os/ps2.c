@@ -41,37 +41,37 @@ static const char scancode_ascii[128] = {
 };
 
 void ps2_init(void) {
-    // Habilita a porta auxiliar do mouse no controlador PS/2
+    /* Enable Auxiliary PS/2 Mouse Device */
     ps2_wait_write();
     outb(0x64, 0xA8);
 
-    // Lê byte de comando
+    /* Read PS/2 Controller Command Byte */
     ps2_wait_write();
     outb(0x64, 0x20);
     ps2_wait_read();
-    uint8_t status = inb(0x60) | 0x02; // Habilita IRQ 12 (Mouse)
+    uint8_t status = inb(0x60) | 0x02; /* Enable IRQ12 */
 
-    // Escreve byte de comando
+    /* Write PS/2 Controller Command Byte */
     ps2_wait_write();
     outb(0x64, 0x60);
     ps2_wait_write();
     outb(0x60, status);
 
-    // Envia comando de padrões padrão para o mouse
+    /* Send default settings command to mouse */
     ps2_wait_write();
     outb(0x64, 0xD4);
     ps2_wait_write();
     outb(0x60, 0xF6);
     ps2_wait_read();
-    inb(0x60); // ACK
+    inb(0x60); /* ACK */
 
-    // Habilita streaming de pacotes de dados
+    /* Enable Mouse Streaming */
     ps2_wait_write();
     outb(0x64, 0xD4);
     ps2_wait_write();
     outb(0x60, 0xF4);
     ps2_wait_read();
-    inb(0x60); // ACK
+    inb(0x60); /* ACK */
 }
 
 void ps2_keyboard_handler(void) {
@@ -85,8 +85,8 @@ void ps2_keyboard_handler(void) {
         return;
     }
 
-    if (!(scancode & 0x80)) { // Key Press
-        // F1 (0x3B) OU TAB (0x0F) OU Ctrl+V (0x2F) alternam para a CLI
+    if (!(scancode & 0x80)) { /* Key Press */
+        /* F1 (0x3B), TAB (0x0F) or Ctrl+V (0x2F) toggles CLI mode */
         if (scancode == 0x3B || scancode == 0x0F || (ctrl_pressed && scancode == 0x2F)) {
             os_toggle_cli_mode();
             return;
@@ -104,7 +104,7 @@ void ps2_mouse_handler(void) {
 
     switch (mouse_cycle) {
         case 0:
-            if (data & 0x08) { // Byte 1 de alinhamento
+            if (data & 0x08) { /* Byte 1 alignment check */
                 mouse_packet[0] = (int8_t)data;
                 mouse_cycle = 1;
             }
@@ -135,7 +135,6 @@ void ps2_mouse_handler(void) {
                 mouse_state.type = KGFX_CURSOR_NORMAL;
             }
 
-            // Força a atualização gráfica do mouse na tela
             os_draw_mouse_cursor();
             break;
     }

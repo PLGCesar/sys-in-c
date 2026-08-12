@@ -32,8 +32,11 @@ static void pic_remap(void) {
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
 
-    outb(0x21, 0xFD); /* Habilita IRQ 1 (Teclado) */
-    outb(0xA1, 0xEF); /* Habilita IRQ 12 (Mouse) */
+    /* Unmask IRQ1 (Keyboard) and IRQ2 (Slave PIC Cascade) on Master PIC */
+    outb(0x21, 0xF9); 
+
+    /* Unmask IRQ12 (Mouse) on Slave PIC */
+    outb(0xA1, 0xEF); 
 }
 
 void idt_init(void) {
@@ -63,20 +66,19 @@ void isr_handler(registers_t *regs) {
     if (regs->int_no == 0) {
         static int div_caught = 0;
         if (!div_caught) {
-            kprintf("\n  • \033[1;31m[IDT EXCEPTION 0]: Divide-by-Zero Exception Caught Safely!\033[0m\n");
+            kprintf("\n  [IDT EXCEPTION 0]: Divide-by-Zero Exception Caught Safely!\n");
             div_caught = 1;
         }
-        /* Avança o EIP em 3 bytes para pular a instrução 'idiv' com falha e evitar loop infinito */
-        regs->eip += 3;
+        regs->eip += 3; /* Advance past failing idiv instruction */
     } else if (regs->int_no == 13) {
-        kprintf("\n  • \033[1;31m[IDT EXCEPTION 13]: General Protection Fault (GPF) Caught!\033[0m\n");
+        kprintf("\n  [IDT EXCEPTION 13]: General Protection Fault (GPF) Caught!\n");
         regs->eip += 2;
     } else if (regs->int_no == 14) {
-        kprintf("\n  • \033[1;31m[IDT EXCEPTION 14]: Page Fault Caught!\033[0m\n");
+        kprintf("\n  [IDT EXCEPTION 14]: Page Fault Caught!\n");
         regs->eip += 2;
     } else if (regs->int_no == 33) {
         ps2_keyboard_handler();
-        outb(0x20, 0x20); /* EOI Master */
+        outb(0x20, 0x20); /* Send PIC EOI */
     } else if (regs->int_no == 44) {
         ps2_mouse_handler();
         outb(0xA0, 0x20); /* EOI Slave */
