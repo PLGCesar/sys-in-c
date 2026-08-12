@@ -22,31 +22,32 @@ jobs:
 
       - name: Build Kernel Binary and ISO
         run: |
-          # Compila os arquivos Assembly
+          # Compila Assembly
           gcc -m32 -c test_os/boot.s -o test_os/boot.o
           gcc -m32 -c test_os/interrupts.s -o test_os/interrupts.o
 
-          # Compila os módulos Freestanding e Drivers em C
-          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kmem.c -o test_os/kmem.o
-          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kfixed.c -o test_os/kfixed.o
-          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kprintf.c -o test_os/kprintf.o
-          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c freestanding/kgfx.c -o test_os/kgfx.o
-          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c test_os/idt.c -o test_os/idt.o
-          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c test_os/ps2.c -o test_os/ps2.o
-          gcc -m32 -ffreestanding -O2 -Wall -Wextra -c test_os/kernel.c -o test_os/kernel.o
+          # Compila C sem PIC/PIE para evitar warnings e erros de realocação
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kmem.c -o test_os/kmem.o
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kfixed.c -o test_os/kfixed.o
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kprintf.c -o test_os/kprintf.o
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kgfx.c -o test_os/kgfx.o
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/gdt.c -o test_os/gdt.o
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/idt.c -o test_os/idt.o
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/ps2.c -o test_os/ps2.o
+          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/kernel.c -o test_os/kernel.o
 
-          # Linka o Binário do Kernel com libgcc
-          gcc -m32 -ffreestanding -nostdlib -T test_os/linker.ld test_os/boot.o test_os/interrupts.o test_os/kmem.o test_os/kfixed.o test_os/kprintf.o test_os/kgfx.o test_os/idt.o test_os/ps2.o test_os/kernel.o -o test_os/myos.bin -lgcc
+          # Linka o Binário
+          gcc -m32 -ffreestanding -fno-pie -nostdlib -T test_os/linker.ld test_os/boot.o test_os/interrupts.o test_os/kmem.o test_os/kfixed.o test_os/kprintf.o test_os/kgfx.o test_os/gdt.o test_os/idt.o test_os/ps2.o test_os/kernel.o -o test_os/myos.bin -lgcc
 
           # Verifica Multiboot1
           grub-file --is-x86-multiboot test_os/myos.bin
 
-          # Prepara estrutura GRUB
+          # Estrutura GRUB
           mkdir -p isodir/boot/grub
           cp test_os/myos.bin isodir/boot/myos.bin
           cp test_os/grub.cfg isodir/boot/grub/grub.cfg
 
-          # Gera a ISO Bootável
+          # Gera ISO
           grub-mkrescue -o test_os.iso isodir
 
       - name: Upload ISO Artifact

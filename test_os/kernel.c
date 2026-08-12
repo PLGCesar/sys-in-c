@@ -1,4 +1,5 @@
 #include "multiboot.h"
+#include "gdt.h"
 #include "idt.h"
 #include "ps2.h"
 #include "../freestanding/kmem.h"
@@ -46,18 +47,19 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     kset_putchar(os_putchar);
 
-    /* 2. Inicializa IDT (Exceptions + PIC) & PS/2 Ports (Teclado + Mouse) */
+    /* 2. Inicializa GDT, IDT e PS/2 */
+    gdt_init();
     idt_init();
     ps2_init();
 
     /* 3. Desenha Interface */
     kgfx_draw_rect(&os_fb, 10, 10, width - 20, height - 20, KGFX_CYAN, 0);
     kgfx_draw_rect(&os_fb, 12, 12, width - 24, 32, KGFX_BLUE, 1);
-    kgfx_draw_string(&os_fb, 20, 22, "utils-in-c OS (IDT + PS/2 Mouse & Keyboard Active)", KGFX_WHITE, KGFX_BLUE);
+    kgfx_draw_string(&os_fb, 20, 22, "utils-in-c OS (GDT + IDT + PS/2 Mouse & Keyboard Active)", KGFX_WHITE, KGFX_BLUE);
 
     /* 4. Diagnóstico do Kernel */
     kprintf("[Kernel Core Subsystems Active]\n");
-    kprintf("  • IDT Handlers      : IDT Loaded | PIC Remapped | STI Enabled\n");
+    kprintf("  • GDT & IDT Handlers: GDT Loaded | IDT Loaded | PIC Remapped\n");
     kprintf("  • PS/2 Driver       : Keyboard (IRQ 1) & Mouse (IRQ 12) Initialized\n");
 
     /* 5. Teste Seguro de Exceção IDT (Divisão por Zero) */
