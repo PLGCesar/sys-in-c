@@ -1,5 +1,6 @@
 #include "kvfs.h"
 #include "kstring.h"
+#include "kmem.h"
 
 static kvfs_node_t vfs_table[KVFS_MAX_NODES];
 static size_t vfs_node_count = 0;
@@ -52,16 +53,13 @@ void kvfs_init(void) {
     }
     vfs_node_count = 0;
 
-    // 1. Cria Diretórios Principais
     kvfs_mkdir("/");
     kvfs_mkdir("/bin");
     kvfs_mkdir("/etc");
     kvfs_mkdir("/dev");
 
-    // 2. Registra Arquivos na Raiz
     kvfs_create("/readme.txt", readme_root, sizeof(readme_root) - 1, KVFS_TYPE_FILE, 0644);
 
-    // 3. Registra Comandos em /bin
     kvfs_create("/bin/ls", bin_ls_help, sizeof(bin_ls_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/cat", bin_cat_help, sizeof(bin_cat_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/mem", bin_mem_help, sizeof(bin_mem_help) - 1, KVFS_TYPE_BIN, 0755);
@@ -71,14 +69,12 @@ void kvfs_init(void) {
     kvfs_create("/bin/help", bin_help_help, sizeof(bin_help_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/exit", bin_exit_help, sizeof(bin_exit_help) - 1, KVFS_TYPE_BIN, 0755);
 
-    // 4. Registra Configurações em /etc
     kvfs_create("/etc/hostname", etc_hostname, sizeof(etc_hostname) - 1, KVFS_TYPE_FILE, 0644);
     kvfs_create("/etc/os-release", etc_os_release, sizeof(etc_os_release) - 1, KVFS_TYPE_FILE, 0644);
     kvfs_create("/etc/passwd", etc_passwd, sizeof(etc_passwd) - 1, KVFS_TYPE_FILE, 0644);
     kvfs_create("/etc/kernel.config", etc_kernel_config, sizeof(etc_kernel_config) - 1, KVFS_TYPE_FILE, 0644);
     kvfs_create("/etc/motd", etc_motd, sizeof(etc_motd) - 1, KVFS_TYPE_FILE, 0644);
 
-    // 5. Registra Dispositivos de Hardware em /dev
     kvfs_create("/dev/null", dev_null_info, sizeof(dev_null_info) - 1, KVFS_TYPE_DEV, 0666);
     kvfs_create("/dev/zero", dev_zero_info, sizeof(dev_zero_info) - 1, KVFS_TYPE_DEV, 0666);
     kvfs_create("/dev/fb0", dev_fb0_info, sizeof(dev_fb0_info) - 1, KVFS_TYPE_DEV, 0660);

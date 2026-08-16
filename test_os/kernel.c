@@ -112,7 +112,7 @@ static void draw_gui_desktop(void) {
     kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC], [F1] ou [TAB] para abrir o Terminal CLI!", KGFX_YELLOW, 0);
 
     kgfx_draw_filled_circle(&os_fb, os_fb.width - 80, 180, 35, KGFX_PURPLE);
-    kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, width - 110, 150, width - 70, 220, KGFX_GREEN, 1);
+    kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, os_fb.width - 110, 150, os_fb.width - 70, 220, KGFX_GREEN, 1);
 
     const kata_drive_info_t *disk = kata_get_info();
 
@@ -266,27 +266,20 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     if (!fb_ptr) fb_ptr = (uint32_t *)0xFD000000;
 
-    // 1. Framebuffer & Text Stream
     kgfx_init(&os_fb, fb_ptr, width, height);
     kset_putchar(os_putchar);
 
-    // 2. Inicializa VFS com /, /bin, /etc, /dev
     kvfs_init();
-
-    // 3. Inicializa Drivers de Hardware
     gdt_init();
     idt_init();
     ps2_init();
     kata_init();
 
-    // 4. Inicializa Gerenciador de Memória Heap
     static uint8_t os_heap_pool[2 * 1024 * 1024];
     kmem_init(os_heap_pool, sizeof(os_heap_pool));
 
-    // 5. Renderiza a Interface Gráfica
     draw_gui_desktop();
 
-    // Loop Principal
     while (1) {
         os_draw_mouse_cursor();
         __asm__ __volatile__ ("hlt");
