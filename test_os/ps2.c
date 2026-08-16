@@ -25,9 +25,8 @@ static kgfx_mouse_t mouse_state = { .x = 400, .y = 300, .buttons = 0, .type = KG
 static uint8_t mouse_cycle = 0;
 static int8_t mouse_packet[3];
 
-static char input_buf[128] = "";
-static size_t input_pos = 0;
 static int ctrl_pressed = 0;
+static int shift_pressed = 0;
 
 extern void os_handle_keypress(char c);
 extern void os_toggle_cli_mode(void);
@@ -40,59 +39,77 @@ static const char scancode_ascii[128] = {
     '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
 };
 
+static const char scancode_ascii_shift[128] = {
+    0, 27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
+    '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
+    0, 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,
+    '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0, '*', 0, ' '
+};
+
 void ps2_init(void) {
-    /* Enable Auxiliary PS/2 Mouse Device */
+    // 1. Habilita portas do Teclado (0xAE) e do Mouse (0xA8)
+    ps2_wait_write();
+    outb(0x64, 0xAE);
+
     ps2_wait_write();
     outb(0x64, 0xA8);
 
-    /* Read PS/2 Controller Command Byte */
+    // 2. Lê e configura o Command Byte da Controladora PS/2
     ps2_wait_write();
     outb(0x64, 0x20);
     ps2_wait_read();
-    uint8_t status = inb(0x60) | 0x02; /* Enable IRQ12 */
+    uint8_t status = inb(0x60);
 
-    /* Write PS/2 Controller Command Byte */
+    // Habilita IRQ1 (Teclado bit 0), IRQ12 (Mouse bit 1), Ativa Clocks (limpa bits 4 e 5) e tradução ScanCode (bit 6)
+    status = (status | 0x47) & ~0x30;
+
     ps2_wait_write();
     outb(0x64, 0x60);
     ps2_wait_write();
     outb(0x60, status);
 
-    /* Send default settings command to mouse */
-    ps2_wait_write();
-    outb(0x64, 0xD4);
-    ps2_wait_write();
-    outb(0x60, 0xF6);
-    ps2_wait_read();
-    inb(0x60); /* ACK */
-
-    /* Enable Mouse Streaming */
-    ps2_wait_write();
-    outb(0x64, 0xD4);
+    // 3. Reseta e Habilita Escaneamento do Teclado
     ps2_wait_write();
     outb(0x60, 0xF4);
     ps2_wait_read();
-    inb(0x60); /* ACK */
+    inb(0x60); // ACK
+
+    // 4. Configura e Habilita Mouse PS/2
+    ps2_wait_write();
+    outb(0x64, 0xD4);
+    ps2_wait_write();
+    outb(0x60, 0xF6); // Set defaults
+    ps2_wait_read();
+    inb(0x60); // ACK
+
+    ps2_wait_write();
+    outb(0x64, 0xD4);
+    ps2_wait_write();
+    outb(0x60, 0xF4); // Enable packet streaming
+    ps2_wait_read();
+    inb(0x60); // ACK
 }
 
 void ps2_keyboard_handler(void) {
     uint8_t scancode = inb(0x60);
 
-    if (scancode == 0x1D) {
-        ctrl_pressed = 1;
-        return;
-    } else if (scancode == 0x9D) {
-        ctrl_pressed = 0;
-        return;
-    }
+    // Modificadores: Shift
+    if (scancode == 0x2A || scancode == 0x36) { shift_pressed = 1; return; }
+    if (scancode == 0xAA || scancode == 0xB6) { shift_pressed = 0; return; }
 
-    if (!(scancode & 0x80)) { /* Key Press */
-        /* F1 (0x3B), TAB (0x0F) or Ctrl+V (0x2F) toggles CLI mode */
+    // Modificadores: Ctrl
+    if (scancode == 0x1D) { ctrl_pressed = 1; return; }
+    if (scancode == 0x9D) { ctrl_pressed = 0; return; }
+
+    // Key Press (Bits < 0x80)
+    if (!(scancode & 0x80)) {
+        // F1 (0x3B), TAB (0x0F) ou Ctrl+V (0x2F) alternam modo CLI/GUI
         if (scancode == 0x3B || scancode == 0x0F || (ctrl_pressed && scancode == 0x2F)) {
             os_toggle_cli_mode();
             return;
         }
 
-        char c = scancode_ascii[scancode];
+        char c = shift_pressed ? scancode_ascii_shift[scancode] : scancode_ascii[scancode];
         if (c) {
             os_handle_keypress(c);
         }
@@ -104,7 +121,7 @@ void ps2_mouse_handler(void) {
 
     switch (mouse_cycle) {
         case 0:
-            if (data & 0x08) { /* Byte 1 alignment check */
+            if (data & 0x08) {
                 mouse_packet[0] = (int8_t)data;
                 mouse_cycle = 1;
             }

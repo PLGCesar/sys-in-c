@@ -21,13 +21,13 @@ static int prev_mouse_x = 400;
 static int prev_mouse_y = 300;
 
 static const char sample_readme[] = "Welcome to utils-in-c OS!\nThis file is read from RAM VFS.";
-static const char sample_config[] = "OS_NAME=utils-in-c OS\nVERSION=2.0\nKERNEL=Multiboot1\nVIDEO=VBE800x600";
+static const char sample_config[] = "OS_NAME=utils-in-c OS\nVERSION=2.5\nKERNEL=Multiboot1\nVIDEO=VBE800x600";
 static const char sample_script[] = "#!/bin/sh\necho 'Running test script inside OS!'";
 
 /* Clean character renderer for KGFX Framebuffer */
 static void os_putchar(char c) {
     static int cursor_x = 30;
-    static int cursor_y = 100;
+    static int cursor_y = 120;
 
     if (c == '\n') {
         cursor_x = 30;
@@ -35,7 +35,7 @@ static void os_putchar(char c) {
     } else if (c == '\b') {
         if (cursor_x >= 38) {
             cursor_x -= 8;
-            kgfx_draw_rect(&os_fb, cursor_x, cursor_y, 8, 12, KGFX_DARKGRAY, 1);
+            kgfx_draw_rect(&os_fb, cursor_x, cursor_y, 8, 12, (os_mode == 1) ? KGFX_BLACK : KGFX_DARKGRAY, 1);
         }
     } else {
         kgfx_draw_char(&os_fb, cursor_x, cursor_y, c, KGFX_WHITE, 0);
@@ -46,10 +46,9 @@ static void os_putchar(char c) {
         }
     }
 
-    /* Screen Scrolling / Reset */
     if (cursor_y > (int)os_fb.height - 40) {
         kgfx_clear(&os_fb, (os_mode == 1) ? KGFX_BLACK : KGFX_DARKGRAY);
-        kgfx_draw_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, KGFX_CYAN, 0);
+        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         cursor_y = 40;
         cursor_x = 30;
     }
@@ -60,15 +59,10 @@ void os_draw_mouse_cursor(void) {
 
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
 
-    /* Erase previous cursor position */
+    // Apaga a posição anterior do mouse
     kgfx_draw_rect(&os_fb, prev_mouse_x, prev_mouse_y, 16, 16, KGFX_DARKGRAY, 1);
 
-    /* Redraw border if mouse moved over window border */
-    if (prev_mouse_x < 20 || prev_mouse_x > (int)os_fb.width - 30 || prev_mouse_y < 20) {
-        kgfx_draw_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, KGFX_CYAN, 0);
-    }
-
-    /* Draw new cursor position */
+    // Desenha o cursor novo
     kgfx_draw_cursor(&os_fb, mouse);
 
     prev_mouse_x = mouse->x;
@@ -108,23 +102,26 @@ static void execute_cli_command(const char *cmd) {
         kprintf("    • Used Memory  : %u bytes\n", (unsigned int)kmem_get_used_bytes());
     } else if (kstrcmp(cmd, "clear") == 0) {
         kgfx_clear(&os_fb, KGFX_BLACK);
-        kgfx_draw_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, KGFX_CYAN, 0);
-        kprintf("[Interactive Kernel CLI Terminal - Press F1, TAB or type 'exit']\n\n");
+        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+        kprintf("[Interactive Kernel CLI Terminal - Type 'help' or 'exit']\n\n");
     } else if (kstrcmp(cmd, "exit") == 0) {
         os_mode = 0;
         kgfx_clear(&os_fb, KGFX_DARKGRAY);
         kprintf("Returned to GUI Mode.\n");
         return;
-    } else {
+    } else if (kstrlen(cmd) > 0) {
         kprintf("  Unknown command '%s'. Type 'help' for available commands.\n", cmd);
     }
     kprintf("test_os> ");
 }
 
 void os_handle_keypress(char c) {
-    if (os_mode == 1) { /* CLI Mode */
+    if (os_mode == 1) {
         if (c == '\b') {
-            if (cli_pos > 0) cli_input[--cli_pos] = '\0';
+            if (cli_pos > 0) {
+                cli_input[--cli_pos] = '\0';
+                kprintf("\b");
+            }
         } else if (c == '\n') {
             execute_cli_command(cli_input);
             cli_pos = 0;
@@ -141,19 +138,13 @@ void os_toggle_cli_mode(void) {
     os_mode = !os_mode;
     if (os_mode == 1) {
         kgfx_clear(&os_fb, KGFX_BLACK);
-        kgfx_draw_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, KGFX_CYAN, 0);
+        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         kprintf("\n[Interactive Kernel CLI Terminal Active - Type 'help' or 'exit']\n\n");
         kprintf("test_os> ");
     } else {
         kgfx_clear(&os_fb, KGFX_DARKGRAY);
         kprintf("Returned to GUI Mode.\n");
     }
-}
-
-static void trigger_divide_by_zero_test(void) {
-    volatile int zero = 0;
-    volatile int result = 100 / zero;
-    (void)result;
 }
 
 void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
@@ -165,7 +156,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     if (!fb_ptr) fb_ptr = (uint32_t *)0xFD000000;
 
-    /* 1. Initialize Framebuffer & VFS */
+    // 1. Inicializa Framebuffer, VFS e Hook de Printf
     kgfx_init(&os_fb, fb_ptr, width, height);
     kgfx_clear(&os_fb, KGFX_DARKGRAY);
     kset_putchar(os_putchar);
@@ -175,41 +166,44 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     kvfs_create_file("kernel.config", sample_config, sizeof(sample_config) - 1, 0644);
     kvfs_create_file("hello.sh", sample_script, sizeof(sample_script) - 1, 0755);
 
-    /* 2. Initialize GDT, IDT & PS/2 Ports */
+    // 2. Inicializa GDT, IDT & PS/2 Drivers (Teclado IRQ 1 e Mouse IRQ 12)
     gdt_init();
     idt_init();
     ps2_init();
 
-    /* 3. Draw Kernel UI Window */
-    kgfx_draw_rect(&os_fb, 10, 10, width - 20, height - 20, KGFX_CYAN, 0);
-    kgfx_draw_rect(&os_fb, 12, 12, width - 24, 32, KGFX_BLUE, 1);
-    kgfx_draw_string(&os_fb, 20, 22, "utils-in-c OS (Press F1, TAB or Ctrl+V for Real CLI)", KGFX_WHITE, KGFX_BLUE);
+    // 3. Renderiza Interface Gráfica Avançada com KGFX
+    kgfx_draw_rounded_rect(&os_fb, 10, 10, width - 20, height - 20, 10, KGFX_CYAN, 0);
+    kgfx_draw_rect(&os_fb, 12, 12, width - 24, 36, KGFX_BLUE, 1);
+    kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.5", KGFX_WHITE, KGFX_BLUE, 2);
 
-    kgfx_draw_circle(&os_fb, width - 100, 180, 50, KGFX_YELLOW);
+    // Janela com Alpha Blending (Translúcida)
+    kgfx_draw_rect_alpha(&os_fb, 20, 60, width - 40, 45, kgfx_argb(180, 24, 24, 37));
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [F1] ou [TAB] a qualquer momento para abrir o Terminal Interativo CLI!", KGFX_YELLOW, 0);
 
-    /* 4. Freestanding Diagnostics */
+    // Primitivas preenchidas de demonstração
+    kgfx_draw_filled_circle(&os_fb, width - 80, 180, 35, KGFX_PURPLE);
+    kgfx_draw_triangle(&os_fb, width - 150, 220, width - 110, 150, width - 70, 220, KGFX_GREEN, 1);
+
+    // 4. Diagnóstico Freestanding no Terminal
     static uint8_t os_heap_pool[2 * 1024 * 1024];
     kmem_init(os_heap_pool, sizeof(os_heap_pool));
     void *page_table = kmalloc_aligned(4096, 4096);
 
-    fp32_t a = fp32_from_int(100);
+    fp32_t a = fp32_from_int(144);
     fp32_t sqrt_res = fp32_sqrt(a);
     char math_buf[32];
     fp32_to_str(sqrt_res, math_buf, sizeof(math_buf), 2);
 
-    kprintf("[Kernel Core Subsystems Active]\n");
-    kprintf("  • GDT & IDT Status  : GDT Loaded | IDT Loaded | PIC Remapped\n");
-    kprintf("  • PS/2 Drivers      : Keyboard (IRQ 1) & Mouse (IRQ 12) Active\n");
-    kprintf("  • KVFS Filesystem   : 3 RAM Files Registered (ls / cat ready)\n");
+    kprintf("[Kernel Core Subsystems Online]\n");
+    kprintf("  • GDT & IDT Status  : GDT Loaded | IDT Remapped (PIC IRQ 1 & 12 Enabled)\n");
+    kprintf("  • PS/2 Hardware     : Keyboard & Mouse Drivers Active & Responsive\n");
+    kprintf("  • KVFS Filesystem   : 3 RAM Files Mounted (ls / cat ready)\n");
     kprintf("  • KMEM Heap Pool    : %d KB | Free: %d KB\n", (int)(sizeof(os_heap_pool)/1024), (int)(kmem_get_free_bytes()/1024));
-    kprintf("  • KFIXED Sqrt(100)  : %s\n", math_buf);
-    kprintf("  • Shortcut Tip      : Press F1, TAB or Ctrl+V to open Real CLI!\n");
-
-    trigger_divide_by_zero_test();
+    kprintf("  • KFIXED Sqrt(144)  : %s\n\n", math_buf);
 
     kfree(page_table);
 
-    /* 5. Main Loop: Render Mouse Cursor in Real-Time */
+    // 5. Loop Principal: Mantém Interrupções ativas e renderiza o Cursor do Mouse
     while (1) {
         os_draw_mouse_cursor();
         __asm__ __volatile__ ("hlt");

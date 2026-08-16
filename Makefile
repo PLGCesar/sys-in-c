@@ -95,7 +95,13 @@ install: all
 		install -m 755 $$tool $(DESTDIR)$(PREFIX)/bin/$$tool; \
 	done
 
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_IPC)
+	for tool in $(TOOLS); do \
+		rm -f $(DESTDIR)$(PREFIX)/bin/$$tool; \
+	done
+
 clean:
 	rm -f $(TOOLS) $(LIB_IPC) freestanding_test kcalc
 
-.PHONY: all install clean free
+.PHONY: all install uninstall clean free
