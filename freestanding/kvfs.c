@@ -5,15 +5,13 @@
 static kvfs_node_t vfs_table[KVFS_MAX_NODES];
 static size_t vfs_node_count = 0;
 
-/* Arquivos Padrão do Sistema /etc */
 static const char etc_hostname[] = "utils-in-c-os\n";
 static const char etc_os_release[] = "NAME=\"utils-in-c OS\"\nVERSION=\"2.5\"\nID=utils-os\nPRETTY_NAME=\"utils-in-c OS v2.5\"\n";
 static const char etc_passwd[] = "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:User:/home/user:/bin/sh\n";
 static const char etc_kernel_config[] = "KERNEL=Multiboot1\nVIDEO=VBE800x600x32\nVFS=Real_Hierarchical_RAM_ATA\nSMP=Enabled\n";
 static const char etc_motd[] = "==========================================\n Welcome to utils-in-c OS (Kernel v2.5)\n Real VFS & ATA PIO Disk Active!\n==========================================\n";
-static const char readme_root[] = "Welcome to utils-in-c OS VFS Root.\nUse 'ls /bin', 'ls /etc' or 'ls /dev' to explore.";
+static const char readme_root[] = "Welcome to utils-in-c OS VFS Root.\nUse 'cd bin', 'cd etc' or 'cd dev' to explore.\nUse 'cat <file>' to read files.";
 
-/* Descrições de Dispositivos /dev */
 static const char dev_null_info[] = "[DEV] Character Device: Null (/dev/null)\n";
 static const char dev_zero_info[] = "[DEV] Character Device: Zero Source (/dev/zero)\n";
 static const char dev_fb0_info[] = "[DEV] Video Framebuffer: 800x600x32bpp VBE ARGB at 0xFD000000\n";
@@ -21,18 +19,22 @@ static const char dev_ps2kbd_info[] = "[DEV] Input Device: PS/2 Keyboard on Port
 static const char dev_ps2mouse_info[] = "[DEV] Input Device: PS/2 Mouse on Port 0x60 (IRQ 12)\n";
 static const char dev_ata0_info[] = "[DEV] Block Device: Primary Master ATA PIO Hard Disk on 0x1F0\n";
 
-/* Ajuda de Comandos /bin */
-static const char bin_ls_help[] = "[BIN] ls [dir] - Lista os arquivos e subdiretórios\n";
-static const char bin_cat_help[] = "[BIN] cat <path> - Exibe o conteúdo de arquivos ou informações de /dev\n";
-static const char bin_mem_help[] = "[BIN] mem - Exibe diagnóstico da memória heap KMEM\n";
+static const char bin_ls_help[] = "[BIN] ls [dir] - Lista os arquivos e subdiretorios\n";
+static const char bin_cd_help[] = "[BIN] cd <dir> - Navega entre os diretorios do sistema\n";
+static const char bin_pwd_help[] = "[BIN] pwd - Exibe o diretorio de trabalho atual\n";
+static const char bin_cat_help[] = "[BIN] cat <path> - Exibe o conteudo de arquivos ou informacoes de /dev\n";
+static const char bin_mem_help[] = "[BIN] mem - Exibe diagnostico da memoria heap KMEM\n";
 static const char bin_clear_help[] = "[BIN] clear - Limpa o terminal CLI\n";
 static const char bin_echo_help[] = "[BIN] echo <texto> - Imprime texto na tela\n";
-static const char bin_ata_help[] = "[BIN] ata [info|read <lba>] - Interage diretamente com o disco rígido ATA PIO\n";
+static const char bin_ata_help[] = "[BIN] ata [info|read <lba>] - Interage diretamente com o disco rigido ATA PIO\n";
 static const char bin_help_help[] = "[BIN] help - Exibe a ajuda geral do sistema\n";
-static const char bin_exit_help[] = "[BIN] exit - Retorna ao modo de interface gráfica GUI\n";
+static const char bin_exit_help[] = "[BIN] exit - Retorna ao modo de interface grafica GUI\n";
 
 static void sanitize_path(const char *in, char *out, size_t max_len) {
     size_t j = 0;
+    if (!in || in[0] == '\0') {
+        out[0] = '/'; out[1] = '\0'; return;
+    }
     if (in[0] != '/') out[j++] = '/';
     for (size_t i = 0; in[i] != '\0' && j < max_len - 1; i++) {
         if (in[i] == '/' && j > 0 && out[j - 1] == '/') continue;
@@ -61,6 +63,8 @@ void kvfs_init(void) {
     kvfs_create("/readme.txt", readme_root, sizeof(readme_root) - 1, KVFS_TYPE_FILE, 0644);
 
     kvfs_create("/bin/ls", bin_ls_help, sizeof(bin_ls_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/cd", bin_cd_help, sizeof(bin_cd_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/pwd", bin_pwd_help, sizeof(bin_pwd_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/cat", bin_cat_help, sizeof(bin_cat_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/mem", bin_mem_help, sizeof(bin_mem_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/clear", bin_clear_help, sizeof(bin_clear_help) - 1, KVFS_TYPE_BIN, 0755);
@@ -145,8 +149,16 @@ void kvfs_list_dir(const char *dir_path, kvfs_ls_callback_t callback) {
         if (is_root) {
             if (p[0] == '/' && p[1] != '\0') {
                 const char *sub = kstrchr(p + 1, '/');
-                if (!sub || (vfs_table[i].type == KVFS_TYPE_DIR && sub[1] == '\0')) {
+                if (!sub) {
                     callback(p + 1, vfs_table[i].size, vfs_table[i].type, vfs_table[i].mode);
+                } else if (vfs_table[i].type == KVFS_TYPE_DIR && sub[1] == '\0') {
+                    char dname[32];
+                    size_t dlen = sub - (p + 1);
+                    if (dlen < sizeof(dname)) {
+                        kstrncpy(dname, p + 1, dlen);
+                        dname[dlen] = '\0';
+                        callback(dname, vfs_table[i].size, vfs_table[i].type, vfs_table[i].mode);
+                    }
                 }
             }
         } else {

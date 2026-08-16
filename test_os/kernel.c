@@ -16,6 +16,7 @@ static int os_mode = 0; /* 0 = GUI Mode, 1 = CLI Mode */
 
 static char cli_input[128] = "";
 static size_t cli_pos = 0;
+static char current_dir[KVFS_MAX_PATH] = "/";
 
 /* Buffer de restauração do mouse (16x16) */
 #define MOUSE_BUF_SZ 16
@@ -85,7 +86,7 @@ static void os_putchar(char c) {
             cursor_x -= 8;
             kgfx_draw_rect(&os_fb, cursor_x, cursor_y, 8, 12, (os_mode == 1) ? KGFX_BLACK : KGFX_DARKGRAY, 1);
         }
-    } else {
+    } else if ((unsigned char)c >= 32) {
         kgfx_draw_char(&os_fb, cursor_x, cursor_y, c, KGFX_WHITE, 0);
         cursor_x += 8;
         if (cursor_x > (int)os_fb.width - 40) {
@@ -131,13 +132,51 @@ static void draw_gui_desktop(void) {
 static void vfs_ls_callback(const char *name, size_t size, uint8_t type, uint16_t mode) {
     (void)mode;
     if (type == KVFS_TYPE_DIR) {
-        kprintf("  \033[1;34m[DIR]\033[0m  %-20s/\n", name);
+        kprintf("  [DIR]   %-16s\n", name);
     } else if (type == KVFS_TYPE_BIN) {
-        kprintf("  \033[1;32m[BIN]\033[0m  %-20s (%u bytes)\n", name, (unsigned int)size);
+        kprintf("  [BIN]   %-16s (%u bytes)\n", name, (unsigned int)size);
     } else if (type == KVFS_TYPE_DEV) {
-        kprintf("  \033[1;33m[DEV]\033[0m  %-20s\n", name);
+        kprintf("  [DEV]   %-16s\n", name);
     } else {
-        kprintf("  \033[1;37m[FILE]\033[0m %-20s (%u bytes)\n", name, (unsigned int)size);
+        kprintf("  [FILE]  %-16s (%u bytes)\n", name, (unsigned int)size);
+    }
+}
+
+static void resolve_path(const char *input_path, char *out, size_t max_len) {
+    if (!input_path || input_path[0] == '\0') {
+        kstrncpy(out, current_dir, max_len - 1);
+        out[max_len - 1] = '\0';
+        return;
+    }
+
+    if (input_path[0] == '/') {
+        kstrncpy(out, input_path, max_len - 1);
+        out[max_len - 1] = '\0';
+        return;
+    }
+
+    if (kstrcmp(input_path, ".") == 0) {
+        kstrncpy(out, current_dir, max_len - 1);
+        out[max_len - 1] = '\0';
+        return;
+    }
+
+    if (kstrcmp(input_path, "..") == 0) {
+        if (kstrcmp(current_dir, "/") == 0) {
+            kstrncpy(out, "/", max_len - 1);
+        } else {
+            kstrncpy(out, current_dir, max_len - 1);
+            char *last_slash = kstrchr(out + 1, '/');
+            if (last_slash) *last_slash = '\0';
+            else { out[0] = '/'; out[1] = '\0'; }
+        }
+        return;
+    }
+
+    if (kstrcmp(current_dir, "/") == 0) {
+        ksnprintf(out, max_len, "/%s", input_path);
+    } else {
+        ksnprintf(out, max_len, "%s/%s", current_dir, input_path);
     }
 }
 
@@ -146,31 +185,57 @@ static void execute_cli_command(const char *cmd) {
 
     while (*cmd == ' ') cmd++;
     if (*cmd == '\0') {
-        kprintf("test_os> ");
+        kprintf("test_os:%s> ", current_dir);
         return;
     }
 
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
         kprintf("  [utils-in-c OS - VFS Commands]\n");
-        kprintf("    • ls [caminho]  : Listar arquivos (ex: 'ls /', 'ls /bin', 'ls /etc', 'ls /dev')\n");
-        kprintf("    • cat <caminho> : Exibir arquivo (ex: 'cat /etc/os-release', 'cat /dev/ata0')\n");
+        kprintf("    • ls [caminho]  : Listar arquivos (ex: 'ls', 'ls /bin', 'ls /etc')\n");
+        kprintf("    • cd [caminho]  : Navegar entre pastas (ex: 'cd etc', 'cd ..', 'cd /')\n");
+        kprintf("    • pwd           : Exibir diretorio atual\n");
+        kprintf("    • cat <caminho> : Exibir arquivo (ex: 'cat os-release', 'cat /dev/ata0')\n");
         kprintf("    • ata <info|0>  : Interagir com disco ATA PIO\n");
         kprintf("    • echo <texto>  : Imprimir texto\n");
         kprintf("    • mem           : Estatisticas da heap KMEM\n");
         kprintf("    • clear         : Limpar terminal\n");
         kprintf("    • exit          : Voltar ao modo GUI\n");
-    } else if (kstrncmp(cmd, "ls", 2) == 0) {
+    } else if (kstrncmp(cmd, "cd", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
         const char *target = cmd + 2;
         while (*target == ' ') target++;
-        if (*target == '\0') target = "/";
 
-        kprintf("  [Directory Listing of %s]:\n", target);
-        kvfs_list_dir(target, vfs_ls_callback);
+        if (*target == '\0' || kstrcmp(target, "/") == 0) {
+            kstrncpy(current_dir, "/", sizeof(current_dir) - 1);
+        } else {
+            char resolved[KVFS_MAX_PATH];
+            resolve_path(target, resolved, sizeof(resolved));
+
+            const kvfs_node_t *dir = kvfs_open(resolved);
+            if (dir && dir->type == KVFS_TYPE_DIR) {
+                kstrncpy(current_dir, resolved, sizeof(current_dir) - 1);
+            } else {
+                kprintf("  cd: '%s': No such directory\n", target);
+            }
+        }
+    } else if (kstrcmp(cmd, "pwd") == 0) {
+        kprintf("  %s\n", current_dir);
+    } else if (kstrncmp(cmd, "ls", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
+        const char *target = cmd + 2;
+        while (*target == ' ') target++;
+
+        char resolved[KVFS_MAX_PATH];
+        resolve_path(*target ? target : "", resolved, sizeof(resolved));
+
+        kprintf("  [Directory Listing of %s]:\n", resolved);
+        kvfs_list_dir(resolved, vfs_ls_callback);
     } else if (kstrncmp(cmd, "cat ", 4) == 0) {
         const char *fname = cmd + 4;
         while (*fname == ' ') fname++;
 
-        const kvfs_node_t *file = kvfs_open(fname);
+        char resolved[KVFS_MAX_PATH];
+        resolve_path(fname, resolved, sizeof(resolved));
+
+        const kvfs_node_t *file = kvfs_open(resolved);
         if (file) {
             kprintf("  [Content of %s]:\n", file->path);
             if (file->data) {
@@ -179,9 +244,9 @@ static void execute_cli_command(const char *cmd) {
                 kprintf("  (Directory / Empty Node)\n");
             }
         } else {
-            kprintf("  Error: '%s' not found in VFS.\n", fname);
+            kprintf("  cat: '%s': No such file or directory\n", fname);
         }
-    } else if (kstrncmp(cmd, "ata", 3) == 0) {
+    } else if (kstrncmp(cmd, "ata", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0')) {
         const char *arg = cmd + 3;
         while (*arg == ' ') arg++;
 
@@ -222,7 +287,8 @@ static void execute_cli_command(const char *cmd) {
     } else {
         kprintf("  Unknown command '%s'. Type 'help' for command list.\n", cmd);
     }
-    kprintf("test_os> ");
+
+    kprintf("test_os:%s> ", current_dir);
 }
 
 void os_handle_keypress(char c) {
@@ -246,12 +312,15 @@ void os_handle_keypress(char c) {
 
 void os_toggle_cli_mode(void) {
     os_mode = !os_mode;
+    cli_pos = 0;
+    cli_input[0] = '\0';
+
     if (os_mode == 1) {
         restore_mouse_under();
         kgfx_clear(&os_fb, KGFX_BLACK);
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         kprintf("\n[Interactive Kernel CLI Terminal Active - Type 'help' or press ESC to exit]\n\n");
-        kprintf("test_os> ");
+        kprintf("test_os:%s> ", current_dir);
     } else {
         mouse_under_saved = 0;
         draw_gui_desktop();
