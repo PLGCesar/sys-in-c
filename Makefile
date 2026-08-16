@@ -66,7 +66,7 @@ qrcli: src/qrcli/qrcli.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/qrcli/qrcli.c -o qrcli $(LDFLAGS_IPC)
 
 bench: src/bench/bench.c $(LIB_IPC)
-	$(CC) $(CFLAGS) src/bench/bench.c -o bench $(LDFLAGS_IPC)
+	$(CC) $(CFLAGS) -O0 src/bench/bench.c -o bench $(LDFLAGS_IPC)
 
 get-info: src/get-info/get-info.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/get-info/get-info.c -o get-info $(LDFLAGS_IPC)
