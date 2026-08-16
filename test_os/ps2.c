@@ -47,64 +47,54 @@ static const char scancode_ascii_shift[128] = {
 };
 
 void ps2_init(void) {
-    // 1. Habilita portas do Teclado (0xAE) e do Mouse (0xA8)
-    ps2_wait_write();
-    outb(0x64, 0xAE);
+    // 1. Desabilita portas durante configuração
+    ps2_wait_write(); outb(0x64, 0xAD);
+    ps2_wait_write(); outb(0x64, 0xA7);
 
-    ps2_wait_write();
-    outb(0x64, 0xA8);
+    // 2. Limpa buffer de saída
+    while (inb(0x64) & 1) inb(0x60);
 
-    // 2. Lê e configura o Command Byte da Controladora PS/2
-    ps2_wait_write();
-    outb(0x64, 0x20);
+    // 3. Lê e configura o Command Byte da Controladora PS/2
+    ps2_wait_write(); outb(0x64, 0x20);
     ps2_wait_read();
     uint8_t status = inb(0x60);
 
-    // Habilita IRQ1 (Teclado bit 0), IRQ12 (Mouse bit 1), Ativa Clocks (limpa bits 4 e 5) e tradução ScanCode (bit 6)
+    // Ativa IRQ1 (bit 0), IRQ12 (bit 1), Tradução ScanCode (bit 6) e limpa clocks desabilitados (bits 4, 5)
     status = (status | 0x47) & ~0x30;
 
-    ps2_wait_write();
-    outb(0x64, 0x60);
-    ps2_wait_write();
-    outb(0x60, status);
+    ps2_wait_write(); outb(0x64, 0x60);
+    ps2_wait_write(); outb(0x60, status);
 
-    // 3. Reseta e Habilita Escaneamento do Teclado
-    ps2_wait_write();
-    outb(0x60, 0xF4);
-    ps2_wait_read();
-    inb(0x60); // ACK
+    // 4. Habilita portas do Teclado (0xAE) e do Mouse (0xA8)
+    ps2_wait_write(); outb(0x64, 0xAE);
+    ps2_wait_write(); outb(0x64, 0xA8);
 
-    // 4. Configura e Habilita Mouse PS/2
-    ps2_wait_write();
-    outb(0x64, 0xD4);
-    ps2_wait_write();
-    outb(0x60, 0xF6); // Set defaults
-    ps2_wait_read();
-    inb(0x60); // ACK
+    // 5. Ativa escaneamento do Teclado
+    ps2_wait_write(); outb(0x60, 0xF4);
+    ps2_wait_read(); inb(0x60); // ACK
 
-    ps2_wait_write();
-    outb(0x64, 0xD4);
-    ps2_wait_write();
-    outb(0x60, 0xF4); // Enable packet streaming
-    ps2_wait_read();
-    inb(0x60); // ACK
+    // 6. Configura e Habilita Mouse PS/2
+    ps2_wait_write(); outb(0x64, 0xD4);
+    ps2_wait_write(); outb(0x60, 0xF6); // Defaults
+    ps2_wait_read(); inb(0x60);
+
+    ps2_wait_write(); outb(0x64, 0xD4);
+    ps2_wait_write(); outb(0x60, 0xF4); // Enable streaming
+    ps2_wait_read(); inb(0x60);
 }
 
 void ps2_keyboard_handler(void) {
+    if (!(inb(0x64) & 1)) return;
     uint8_t scancode = inb(0x60);
 
-    // Modificadores: Shift
     if (scancode == 0x2A || scancode == 0x36) { shift_pressed = 1; return; }
     if (scancode == 0xAA || scancode == 0xB6) { shift_pressed = 0; return; }
-
-    // Modificadores: Ctrl
     if (scancode == 0x1D) { ctrl_pressed = 1; return; }
     if (scancode == 0x9D) { ctrl_pressed = 0; return; }
 
-    // Key Press (Bits < 0x80)
     if (!(scancode & 0x80)) {
-        // F1 (0x3B), TAB (0x0F) ou Ctrl+V (0x2F) alternam modo CLI/GUI
-        if (scancode == 0x3B || scancode == 0x0F || (ctrl_pressed && scancode == 0x2F)) {
+        // ESC (0x01), F1 (0x3B), TAB (0x0F) ou Ctrl+V (0x2F) alternam CLI/GUI
+        if (scancode == 0x01 || scancode == 0x3B || scancode == 0x0F || (ctrl_pressed && scancode == 0x2F)) {
             os_toggle_cli_mode();
             return;
         }
@@ -117,6 +107,7 @@ void ps2_keyboard_handler(void) {
 }
 
 void ps2_mouse_handler(void) {
+    if (!(inb(0x64) & 1)) return;
     uint8_t data = inb(0x60);
 
     switch (mouse_cycle) {
@@ -130,14 +121,19 @@ void ps2_mouse_handler(void) {
             mouse_packet[1] = (int8_t)data;
             mouse_cycle = 2;
             break;
-        case 2:
+        case 2: {
             mouse_packet[2] = (int8_t)data;
             mouse_cycle = 0;
 
-            mouse_state.buttons = mouse_packet[0] & 0x07;
-            int rel_x = mouse_packet[1];
-            int rel_y = mouse_packet[2];
+            uint8_t flags = (uint8_t)mouse_packet[0];
+            int rel_x = (int)mouse_packet[1];
+            int rel_y = (int)mouse_packet[2];
 
+            if (flags & 0x10) rel_x |= 0xFFFFFF00;
+            if (flags & 0x20) rel_y |= 0xFFFFFF00;
+            if (flags & 0xC0) break; // Descarta se estourou buffer
+
+            mouse_state.buttons = flags & 0x07;
             mouse_state.x += rel_x;
             mouse_state.y -= rel_y;
 
@@ -151,9 +147,8 @@ void ps2_mouse_handler(void) {
             } else {
                 mouse_state.type = KGFX_CURSOR_NORMAL;
             }
-
-            os_draw_mouse_cursor();
             break;
+        }
     }
 }
 

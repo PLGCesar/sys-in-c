@@ -16,8 +16,9 @@ typedef struct {
     uint32_t base;
 } __attribute__((packed)) idt_ptr_t;
 
+/* Alinhamento exato com o assembly de interrupts.s */
 typedef struct {
-    uint32_t ds;
+    uint32_t gs, fs, es, ds;
     uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;
     uint32_t int_no, err_code;
     uint32_t eip, cs, eflags, useresp, ss;
@@ -29,7 +30,7 @@ void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
 extern void isr0(void);   /* Divide Error */
 extern void isr13(void);  /* GPF */
 extern void isr14(void);  /* Page Fault */
-extern void irq1(void);   /* PS/2 Keyboard */
-extern void irq12(void);  /* PS/2 Mouse */
+extern void irq1(void);   /* PS/2 Keyboard (IRQ 1) */
+extern void irq12(void);  /* PS/2 Mouse (IRQ 12) */
 
 #endif

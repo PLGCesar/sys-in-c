@@ -1,7 +1,20 @@
 #include "kgfx.h"
 #include "kmem.h"
 
-/* Compact 8x8 ASCII font bitmap table (ASCII 32 to 126) */
+#if defined(__x86_64__) || defined(__i386__)
+static inline void kgfx_outb(uint16_t port, uint8_t val) {
+    __asm__ __volatile__ ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+static inline uint8_t kgfx_inb(uint16_t port) {
+    uint8_t ret;
+    __asm__ __volatile__ ("inb %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+#else
+static inline void kgfx_outb(uint16_t port, uint8_t val) { (void)port; (void)val; }
+static inline uint8_t kgfx_inb(uint16_t port) { (void)port; return 0; }
+#endif
+
 static const uint8_t kgfx_font8x8[95][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* Space */
     {0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00}, /* ! */
@@ -100,7 +113,6 @@ static const uint8_t kgfx_font8x8[95][8] = {
     {0x3B,0x6E,0x00,0x00,0x00,0x00,0x00,0x00}  /* ~ */
 };
 
-/* Mouse cursor bitmaps (10x14) */
 static const uint16_t cursor_arrow[14] = {
     0b100000000000, 0b110000000000, 0b111000000000, 0b111100000000,
     0b111110000000, 0b111111000000, 0b111111100000, 0b111111110000,
@@ -143,13 +155,8 @@ uint32_t kgfx_blend_colors(uint32_t bg, uint32_t fg) {
     if (a == 255) return fg;
     if (a == 0) return bg;
 
-    uint8_t fg_r = (fg >> 16) & 0xFF;
-    uint8_t fg_g = (fg >> 8) & 0xFF;
-    uint8_t fg_b = fg & 0xFF;
-
-    uint8_t bg_r = (bg >> 16) & 0xFF;
-    uint8_t bg_g = (bg >> 8) & 0xFF;
-    uint8_t bg_b = bg & 0xFF;
+    uint8_t fg_r = (fg >> 16) & 0xFF, fg_g = (fg >> 8) & 0xFF, fg_b = fg & 0xFF;
+    uint8_t bg_r = (bg >> 16) & 0xFF, bg_g = (bg >> 8) & 0xFF, bg_b = bg & 0xFF;
 
     uint8_t out_r = (uint8_t)((fg_r * a + bg_r * (255 - a)) / 255);
     uint8_t out_g = (uint8_t)((fg_g * a + bg_g * (255 - a)) / 255);
@@ -403,4 +410,55 @@ void kgfx_draw_cursor(kgfx_fb_t *fb, const kgfx_mouse_t *mouse) {
 int kgfx_rect_contains(const kgfx_rect_t *rect, int x, int y) {
     if (!rect) return 0;
     return (x >= rect->x && x < (rect->x + rect->w) && y >= rect->y && y < (rect->y + rect->h));
+}
+
+/* --- VGA Mode 03h Driver (Text Mode 80x25 at 0xB8000) --- */
+static volatile kgfx_vga_cell_t *vga3h_mem = (volatile kgfx_vga_cell_t *)0xB8000;
+
+void kgfx_vga3h_putc(int col, int row, char c, uint8_t fg, uint8_t bg) {
+    if (col < 0 || col >= 80 || row < 0 || row >= 25) return;
+    uint8_t attr = (uint8_t)((bg << 4) | (fg & 0x0F));
+    int idx = row * 80 + col;
+    vga3h_mem[idx].character = (uint8_t)c;
+    vga3h_mem[idx].attribute = attr;
+}
+
+void kgfx_vga3h_print(int col, int row, const char *str, uint8_t fg, uint8_t bg) {
+    while (*str) {
+        kgfx_vga3h_putc(col++, row, *str++, fg, bg);
+        if (col >= 80) {
+            col = 0;
+            row++;
+        }
+    }
+}
+
+void kgfx_vga3h_clear(uint8_t bg) {
+    for (int r = 0; r < 25; r++) {
+        for (int c = 0; c < 80; c++) {
+            kgfx_vga3h_putc(c, r, ' ', 0x0F, bg);
+        }
+    }
+}
+
+/* --- UART Serial Port Driver (COM1 0x3F8) --- */
+void kgfx_serial_init(void) {
+    kgfx_outb(COM1_PORT + 1, 0x00);
+    kgfx_outb(COM1_PORT + 3, 0x80);
+    kgfx_outb(COM1_PORT + 0, 0x03);
+    kgfx_outb(COM1_PORT + 1, 0x00);
+    kgfx_outb(COM1_PORT + 3, 0x03);
+    kgfx_outb(COM1_PORT + 2, 0xC7);
+    kgfx_outb(COM1_PORT + 4, 0x0B);
+}
+
+void kgfx_serial_putc(char c) {
+    while ((kgfx_inb(COM1_PORT + 5) & 0x20) == 0);
+    kgfx_outb(COM1_PORT, (uint8_t)c);
+}
+
+void kgfx_serial_print(const char *str) {
+    while (*str) {
+        kgfx_serial_putc(*str++);
+    }
 }

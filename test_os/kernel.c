@@ -10,9 +10,7 @@
 #include "../freestanding/kvfs.h"
 
 static kgfx_fb_t os_fb;
-
-/* 0 = GUI Mode, 1 = CLI Mode */
-static int os_mode = 0;
+static int os_mode = 0; /* 0 = GUI Mode, 1 = CLI Mode */
 
 static char cli_input[128] = "";
 static size_t cli_pos = 0;
@@ -24,7 +22,6 @@ static const char sample_readme[] = "Welcome to utils-in-c OS!\nThis file is rea
 static const char sample_config[] = "OS_NAME=utils-in-c OS\nVERSION=2.5\nKERNEL=Multiboot1\nVIDEO=VBE800x600";
 static const char sample_script[] = "#!/bin/sh\necho 'Running test script inside OS!'";
 
-/* Clean character renderer for KGFX Framebuffer */
 static void os_putchar(char c) {
     static int cursor_x = 30;
     static int cursor_y = 120;
@@ -58,11 +55,16 @@ void os_draw_mouse_cursor(void) {
     if (os_mode != 0) return;
 
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
+    if (mouse->x == prev_mouse_x && mouse->y == prev_mouse_y) return;
 
-    // Apaga a posição anterior do mouse
     kgfx_draw_rect(&os_fb, prev_mouse_x, prev_mouse_y, 16, 16, KGFX_DARKGRAY, 1);
 
-    // Desenha o cursor novo
+    if (prev_mouse_y < 50 || prev_mouse_x < 20 || prev_mouse_x > (int)os_fb.width - 30) {
+        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 10, KGFX_CYAN, 0);
+        kgfx_draw_rect(&os_fb, 12, 12, os_fb.width - 24, 36, KGFX_BLUE, 1);
+        kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.5", KGFX_WHITE, KGFX_BLUE, 2);
+    }
+
     kgfx_draw_cursor(&os_fb, mouse);
 
     prev_mouse_x = mouse->x;
@@ -103,7 +105,7 @@ static void execute_cli_command(const char *cmd) {
     } else if (kstrcmp(cmd, "clear") == 0) {
         kgfx_clear(&os_fb, KGFX_BLACK);
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
-        kprintf("[Interactive Kernel CLI Terminal - Type 'help' or 'exit']\n\n");
+        kprintf("[Interactive Kernel CLI Terminal - Press ESC to Return to GUI]\n\n");
     } else if (kstrcmp(cmd, "exit") == 0) {
         os_mode = 0;
         kgfx_clear(&os_fb, KGFX_DARKGRAY);
@@ -139,11 +141,13 @@ void os_toggle_cli_mode(void) {
     if (os_mode == 1) {
         kgfx_clear(&os_fb, KGFX_BLACK);
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
-        kprintf("\n[Interactive Kernel CLI Terminal Active - Type 'help' or 'exit']\n\n");
+        kprintf("\n[Interactive Kernel CLI Terminal Active - Type 'help' or press ESC to exit]\n\n");
         kprintf("test_os> ");
     } else {
         kgfx_clear(&os_fb, KGFX_DARKGRAY);
-        kprintf("Returned to GUI Mode.\n");
+        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 10, KGFX_CYAN, 0);
+        kgfx_draw_rect(&os_fb, 12, 12, os_fb.width - 24, 36, KGFX_BLUE, 1);
+        kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.5", KGFX_WHITE, KGFX_BLUE, 2);
     }
 }
 
@@ -156,7 +160,6 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     if (!fb_ptr) fb_ptr = (uint32_t *)0xFD000000;
 
-    // 1. Inicializa Framebuffer, VFS e Hook de Printf
     kgfx_init(&os_fb, fb_ptr, width, height);
     kgfx_clear(&os_fb, KGFX_DARKGRAY);
     kset_putchar(os_putchar);
@@ -166,25 +169,20 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     kvfs_create_file("kernel.config", sample_config, sizeof(sample_config) - 1, 0644);
     kvfs_create_file("hello.sh", sample_script, sizeof(sample_script) - 1, 0755);
 
-    // 2. Inicializa GDT, IDT & PS/2 Drivers (Teclado IRQ 1 e Mouse IRQ 12)
     gdt_init();
     idt_init();
     ps2_init();
 
-    // 3. Renderiza Interface Gráfica Avançada com KGFX
     kgfx_draw_rounded_rect(&os_fb, 10, 10, width - 20, height - 20, 10, KGFX_CYAN, 0);
     kgfx_draw_rect(&os_fb, 12, 12, width - 24, 36, KGFX_BLUE, 1);
     kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.5", KGFX_WHITE, KGFX_BLUE, 2);
 
-    // Janela com Alpha Blending (Translúcida)
     kgfx_draw_rect_alpha(&os_fb, 20, 60, width - 40, 45, kgfx_argb(180, 24, 24, 37));
-    kgfx_draw_string(&os_fb, 30, 75, "Pressione [F1] ou [TAB] a qualquer momento para abrir o Terminal Interativo CLI!", KGFX_YELLOW, 0);
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC], [F1] ou [TAB] para abrir o Terminal Interativo CLI!", KGFX_YELLOW, 0);
 
-    // Primitivas preenchidas de demonstração
     kgfx_draw_filled_circle(&os_fb, width - 80, 180, 35, KGFX_PURPLE);
     kgfx_draw_triangle(&os_fb, width - 150, 220, width - 110, 150, width - 70, 220, KGFX_GREEN, 1);
 
-    // 4. Diagnóstico Freestanding no Terminal
     static uint8_t os_heap_pool[2 * 1024 * 1024];
     kmem_init(os_heap_pool, sizeof(os_heap_pool));
     void *page_table = kmalloc_aligned(4096, 4096);
@@ -195,7 +193,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     fp32_to_str(sqrt_res, math_buf, sizeof(math_buf), 2);
 
     kprintf("[Kernel Core Subsystems Online]\n");
-    kprintf("  • GDT & IDT Status  : GDT Loaded | IDT Remapped (PIC IRQ 1 & 12 Enabled)\n");
+    kprintf("  • GDT & IDT Status  : GDT Loaded | IDT Fixed (Stack Aligned & Interrupts Active)\n");
     kprintf("  • PS/2 Hardware     : Keyboard & Mouse Drivers Active & Responsive\n");
     kprintf("  • KVFS Filesystem   : 3 RAM Files Mounted (ls / cat ready)\n");
     kprintf("  • KMEM Heap Pool    : %d KB | Free: %d KB\n", (int)(sizeof(os_heap_pool)/1024), (int)(kmem_get_free_bytes()/1024));
@@ -203,7 +201,6 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     kfree(page_table);
 
-    // 5. Loop Principal: Mantém Interrupções ativas e renderiza o Cursor do Mouse
     while (1) {
         os_draw_mouse_cursor();
         __asm__ __volatile__ ("hlt");
