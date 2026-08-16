@@ -139,13 +139,15 @@ static size_t file_count = 0;
 static size_t file_capacity = 0;
 
 static const char *ignored_dirs[] = {
-    ".git", "node_modules", "vendor", ".cache", ".vscode", "build",
-    "/proc", "/sys", "/dev", NULL
+    ".git", "node_modules", "vendor", ".cache", ".vscode", ".idea", "build", "dist",
+    "/proc", "/sys", "/dev", "/system", "/data", NULL
 };
 
 static int is_ignored(const char *name) {
     for (int i = 0; ignored_dirs[i] != NULL; i++) {
-        if (strstr(name, ignored_dirs[i]) != NULL) return 1;
+        if (strcmp(name, ignored_dirs[i]) == 0 || strstr(name, ignored_dirs[i]) != NULL) {
+            return 1;
+        }
     }
     return 0;
 }
@@ -176,13 +178,30 @@ static void scan_recursive(const char *dir_path, int depth) {
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         if (entry->d_name[0] == '.') continue;
+        if (is_ignored(entry->d_name)) continue;
+
         snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
-        if (is_ignored(path)) continue;
+
+#ifdef DT_DIR
+        if (entry->d_type == DT_DIR) {
+            scan_recursive(path, depth + 1);
+            continue;
+        } else if (entry->d_type == DT_REG) {
+            struct stat st;
+            if (stat(path, &st) == 0 && st.st_size > 0) {
+                add_file(path, st.st_size);
+            }
+            continue;
+        }
+#endif
 
         struct stat st;
         if (stat(path, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) scan_recursive(path, depth + 1);
-            else if (S_ISREG(st.st_mode) && st.st_size > 0) add_file(path, st.st_size);
+            if (S_ISDIR(st.st_mode)) {
+                scan_recursive(path, depth + 1);
+            } else if (S_ISREG(st.st_mode) && st.st_size > 0) {
+                add_file(path, st.st_size);
+            }
         }
     }
     closedir(dir);
@@ -196,12 +215,11 @@ static int compare_by_size(const void *a, const void *b) {
     return 0;
 }
 
-// ---- MULTITHREADING WORKER ----
 typedef struct {
     int file_index;
 } ThreadArg;
 
-void* hash_worker(void* arg) {
+static void* hash_worker(void* arg) {
     ThreadArg* t_arg = (ThreadArg*)arg;
     int idx = t_arg->file_index;
     if (compute_file_sha256(files[idx].path, files[idx].hash) == 0) {
@@ -212,17 +230,20 @@ void* hash_worker(void* arg) {
 
 int main(int argc, char *argv[]) {
     utilipc_init();
-    const char *start_dir = (argc >= 2) ? argv[1] : ".";
+    const char *start_dir = ".";
+    if (argc >= 2) start_dir = argv[1];
 
     printf("%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
-    printf("%s[ fdup - Turbo Duplicate Finder (Multithreaded) ]%s\n", COLOR_TITLE, COLOR_RESET);
+    printf("%s[ fdup - Duplicate File Finder (Multithreaded) ]%s\n", COLOR_TITLE, COLOR_RESET);
     printf("%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
     printf("  Scanning directory: %s...\n", start_dir);
 
     scan_recursive(start_dir, 1);
+
     if (file_count == 0) {
         printf("No files found.\n");
         free(files);
+        utilipc_close();
         return 0;
     }
 
@@ -234,7 +255,6 @@ int main(int argc, char *argv[]) {
     for (size_t i = 0; i < file_count; i++) {
         if (files[i].group_id != -1) continue;
 
-        // Verifica se há arquivos com o mesmo tamanho (potenciais duplicados)
         size_t match_count = 1;
         for (size_t j = i + 1; j < file_count; j++) {
             if (files[j].size != files[i].size) break;
@@ -242,26 +262,24 @@ int main(int argc, char *argv[]) {
         }
 
         if (match_count > 1) {
-            // Cria threads para calcular hashes apenas dos arquivos com tamanhos iguais
             pthread_t *threads = malloc(match_count * sizeof(pthread_t));
             ThreadArg *args = malloc(match_count * sizeof(ThreadArg));
-            
+
             for (size_t k = 0; k < match_count; k++) {
                 args[k].file_index = i + k;
-                if (!files[i+k].hash_computed) {
+                if (!files[i + k].hash_computed) {
                     pthread_create(&threads[k], NULL, hash_worker, &args[k]);
                 }
             }
 
             for (size_t k = 0; k < match_count; k++) {
-                if (!files[i+k].hash_computed) {
+                if (!files[i + k].hash_computed) {
                     pthread_join(threads[k], NULL);
                 }
             }
             free(threads);
             free(args);
 
-            // Compara os hashes gerados em paralelo
             int group_found = 0;
             for (size_t j = i + 1; j < i + match_count; j++) {
                 if (files[j].group_id != -1) continue;
@@ -270,25 +288,35 @@ int main(int argc, char *argv[]) {
                         current_group++;
                         files[i].group_id = current_group;
                         group_found = 1;
+
                         double size_mb = (double)files[i].size / (1024.0 * 1024.0);
                         printf("\n%s[Group %d - Size: %s%.2f MB%s | SHA256: ", COLOR_GROUP, current_group, COLOR_SIZE, size_mb, COLOR_GROUP);
                         for (int h = 0; h < 8; h++) printf("%02x", files[i].hash[h]);
                         printf("...]%s\n", COLOR_RESET);
                         printf("  • %s%s%s\n", COLOR_PATH, files[i].path, COLOR_RESET);
                     }
+
                     files[j].group_id = current_group;
                     printf("  • %s%s%s\n", COLOR_PATH, files[j].path, COLOR_RESET);
                     total_wasted_bytes += files[i].size;
                 }
             }
         }
-        i += match_count - 1; // Pula os arquivos já checados
+        i += match_count - 1;
     }
 
     printf("\n%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
     double wasted_mb = (double)total_wasted_bytes / (1024.0 * 1024.0);
-    printf("[Done. Duplicate Groups: %d | Wasted Space: %s%.2f MB%s]\n", current_group, COLOR_SIZE, wasted_mb, COLOR_RESET);
+    if (wasted_mb >= 1024.0) {
+        printf("[Done. Duplicate Groups: %d | Wasted Space: %s%.2f GB%s]\n", current_group, COLOR_SIZE, wasted_mb / 1024.0, COLOR_RESET);
+    } else {
+        printf("[Done. Duplicate Groups: %d | Wasted Space: %s%.2f MB%s]\n", current_group, COLOR_SIZE, wasted_mb, COLOR_RESET);
+    }
     printf("%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
+
+    char log_msg[UTILIPC_MAX_MSG];
+    snprintf(log_msg, sizeof(log_msg), "fdup: found %d duplicate groups (wasted: %.1fMB)", current_group, wasted_mb);
+    utilipc_write_status(-1, -1, -1, log_msg);
 
     free(files);
     utilipc_close();
