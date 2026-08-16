@@ -15,8 +15,17 @@ int kstrncmp(const char *s1, const char *s2, size_t n);
 char *kstrcpy(char *dest, const char *src);
 char *kstrncpy(char *dest, const char *src, size_t n);
 
-/* Character search */
+/* String concatenation */
+char *kstrcat(char *dest, const char *src);
+char *kstrncat(char *dest, const char *src, size_t n);
+
+/* Character and substring search */
 char *kstrchr(const char *str, int c);
+char *kstrstr(const char *haystack, const char *needle);
+
+/* Memory operations */
+int kmemcmp(const void *s1, const void *s2, size_t n);
+void *kmemmove(void *dest, const void *src, size_t n);
 
 /* Integer to ASCII string conversion */
 size_t kitoa(int64_t val, char *buf, int base, int uppercase);
