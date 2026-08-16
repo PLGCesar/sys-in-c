@@ -4,102 +4,64 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
-#include <arpa/inet.h>
 #include <fcntl.h>
-#include <errno.h>
-#include <time.h>
-#include "../libutilipc/utilipc.h"
+#include <termios.h>
 
-int main(int argc, char *argv[]) {
-    utilipc_init();
-
-    if (argc < 3) {
-        printf("Usage: %s <host> <port>\n", argv[0]);
-        printf("Example: %s google.com 443\n", argv[0]);
-        utilipc_close();
-        return 1;
-    }
-
-    const char *host = argv[1];
-    int port = atoi(argv[2]);
-
-    if (port <= 0 || port > 65535) {
-        printf("Error: Invalid port number (1-65535).\n");
-        utilipc_close();
-        return 1;
-    }
-
-    printf("======================\n");
-    printf("[Checking %s:%d...]\n", host, port);
-
+static void check_port(const char *host, int port) {
     struct addrinfo hints, *res;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
+    char p_str[10]; snprintf(p_str, sizeof(p_str), "%d", port);
 
-    char port_str[10];
-    snprintf(port_str, sizeof(port_str), "%d", port);
-
-    if (getaddrinfo(host, port_str, &hints, &res) != 0) {
-        printf("[Result: HOST UNRESOLVED]\n");
-        printf("======================\n");
-        utilipc_close();
-        return 1;
+    printf("\n  \033[1;33m[Conectando a %s:%d...]\033[0m\n", host, port);
+    if (getaddrinfo(host, p_str, &hints, &res) != 0) {
+        printf("  \033[1;31m[Resultado: HOST UNRESOLVED]\033[0m\n"); return;
     }
 
-    int sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (sockfd < 0) {
-        printf("[Result: SOCKET ERROR]\n");
-        freeaddrinfo(res);
-        printf("======================\n");
-        utilipc_close();
-        return 1;
-    }
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { printf("  \033[1;31m[Resultado: SOCKET ERROR]\033[0m\n"); return; }
 
-    int flags = fcntl(sockfd, F_GETFL, 0);
-    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+    struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
-
-    int conn_result = connect(sockfd, res->ai_addr, res->ai_addrlen);
-    int is_open = 0;
-
-    if (conn_result == 0) {
-        is_open = 1;
-    } else if (errno == EINPROGRESS) {
-        fd_set fdset;
-        FD_ZERO(&fdset);
-        FD_SET(sockfd, &fdset);
-
-        struct timeval tv = { .tv_sec = 3, .tv_usec = 0 };
-
-        if (select(sockfd + 1, NULL, &fdset, NULL, &tv) > 0) {
-            int so_error = 0;
-            socklen_t len = sizeof(so_error);
-            getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &so_error, &len);
-            if (so_error == 0) is_open = 1;
-        }
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double time_ms = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1000000.0;
-
-    if (is_open) {
-        printf("[Status: OPEN]\n");
-        printf("[Latency: %.2f ms]\n", time_ms);
+    if (connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
+        printf("  \033[1;32m[Status: OPEN / ABERTA]\033[0m\n");
     } else {
-        printf("[Status: CLOSED / TIMEOUT]\n");
+        printf("  \033[1;31m[Status: CLOSED / TIMEOUT]\033[0m\n");
     }
+    close(fd); freeaddrinfo(res);
+}
 
-    close(sockfd);
-    freeaddrinfo(res);
-    printf("======================\n");
+static void run_tui(void) {
+    char host[128] = "";
+    char port_str[16] = "";
+    
+    printf("\033[H\033[J\033[1;35m");
+    printf("╔══════════════════════════════════════╗\n");
+    printf("║      portcheck - TUI Scanner         ║\n");
+    printf("╚══════════════════════════════════════╝\033[0m\n\n");
+    
+    printf("  Digite o Host (ex: google.com): ");
+    if(scanf("%127s", host) != 1) return;
 
-    char log_msg[UTILIPC_MAX_MSG];
-    snprintf(log_msg, sizeof(log_msg), "portcheck: %s:%d [%s]", host, port, is_open ? "OPEN" : "CLOSED");
-    utilipc_write_status(-1, -1, -1, log_msg);
+    printf("  Digite a Porta (ex: 443): ");
+    if(scanf("%15s", port_str) != 1) return;
 
-    utilipc_close();
+    check_port(host, atoi(port_str));
+    printf("\n\033[1;35m========================================\033[0m\n");
+}
+
+int main(int argc, char *argv[]) {
+    if (argc >= 2 && strcmp(argv[1], "-tui") == 0) {
+        run_tui();
+        return 0;
+    }
+    
+    if (argc < 3) {
+        printf("Usage:\n  portcheck -tui\n  portcheck <host> <port>\n");
+        return 1;
+    }
+    check_port(argv[1], atoi(argv[2]));
     return 0;
 }

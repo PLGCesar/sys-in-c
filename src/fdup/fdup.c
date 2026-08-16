@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <pthread.h>
 #include "../libutilipc/utilipc.h"
 
 #define MAX_DEPTH 15
@@ -14,7 +15,6 @@
 #define COLOR_PATH    "\033[0;36m"
 #define COLOR_SIZE    "\033[1;32m"
 
-// --- SHA-256 ---
 typedef struct {
     uint8_t data[64];
     uint32_t datalen;
@@ -47,16 +47,13 @@ static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
         m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
     for (; i < 64; ++i)
         m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
-
     a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
     e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];
-
     for (i = 0; i < 64; ++i) {
         t1 = h + EP1(e) + CH(e, f, g) + K[i] + m[i];
         t2 = EP0(a) + MAJ(a, b, c);
         h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
     }
-
     ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
     ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
 }
@@ -92,7 +89,6 @@ static void sha256_final(SHA256_CTX *ctx, uint8_t hash[]) {
         sha256_transform(ctx, ctx->data);
         memset(ctx->data, 0, 56);
     }
-
     ctx->bitlen += ctx->datalen * 8;
     ctx->data[56] = (ctx->bitlen >> 56) & 0xFF;
     ctx->data[57] = (ctx->bitlen >> 48) & 0xFF;
@@ -103,7 +99,6 @@ static void sha256_final(SHA256_CTX *ctx, uint8_t hash[]) {
     ctx->data[62] = (ctx->bitlen >> 8) & 0xFF;
     ctx->data[63] = (ctx->bitlen) & 0xFF;
     sha256_transform(ctx, ctx->data);
-
     for (i = 0; i < 4; ++i) {
         hash[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
         hash[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
@@ -119,17 +114,14 @@ static void sha256_final(SHA256_CTX *ctx, uint8_t hash[]) {
 static int compute_file_sha256(const char *filepath, uint8_t hash_out[32]) {
     FILE *fp = fopen(filepath, "rb");
     if (!fp) return -1;
-
     SHA256_CTX ctx;
     sha256_init(&ctx);
-
     unsigned char buf[65536];
     size_t bytes = 0;
     while ((bytes = fread(buf, 1, sizeof(buf), fp)) > 0) {
         sha256_update(&ctx, buf, bytes);
     }
     fclose(fp);
-
     sha256_final(&ctx, hash_out);
     return 0;
 }
@@ -147,15 +139,13 @@ static size_t file_count = 0;
 static size_t file_capacity = 0;
 
 static const char *ignored_dirs[] = {
-    ".git", "node_modules", "vendor", ".cache", ".vscode", ".idea", "build", "dist",
-    "/proc", "/sys", "/dev", "/system", "/data", NULL
+    ".git", "node_modules", "vendor", ".cache", ".vscode", "build",
+    "/proc", "/sys", "/dev", NULL
 };
 
 static int is_ignored(const char *name) {
     for (int i = 0; ignored_dirs[i] != NULL; i++) {
-        if (strcmp(name, ignored_dirs[i]) == 0 || strstr(name, ignored_dirs[i]) != NULL) {
-            return 1;
-        }
+        if (strstr(name, ignored_dirs[i]) != NULL) return 1;
     }
     return 0;
 }
@@ -186,30 +176,13 @@ static void scan_recursive(const char *dir_path, int depth) {
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         if (entry->d_name[0] == '.') continue;
-        if (is_ignored(entry->d_name)) continue;
-
         snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
-
-#ifdef DT_DIR
-        if (entry->d_type == DT_DIR) {
-            scan_recursive(path, depth + 1);
-            continue;
-        } else if (entry->d_type == DT_REG) {
-            struct stat st;
-            if (stat(path, &st) == 0 && st.st_size > 0) {
-                add_file(path, st.st_size);
-            }
-            continue;
-        }
-#endif
+        if (is_ignored(path)) continue;
 
         struct stat st;
         if (stat(path, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) {
-                scan_recursive(path, depth + 1);
-            } else if (S_ISREG(st.st_mode) && st.st_size > 0) {
-                add_file(path, st.st_size);
-            }
+            if (S_ISDIR(st.st_mode)) scan_recursive(path, depth + 1);
+            else if (S_ISREG(st.st_mode) && st.st_size > 0) add_file(path, st.st_size);
         }
     }
     closedir(dir);
@@ -223,23 +196,33 @@ static int compare_by_size(const void *a, const void *b) {
     return 0;
 }
 
+// ---- MULTITHREADING WORKER ----
+typedef struct {
+    int file_index;
+} ThreadArg;
+
+void* hash_worker(void* arg) {
+    ThreadArg* t_arg = (ThreadArg*)arg;
+    int idx = t_arg->file_index;
+    if (compute_file_sha256(files[idx].path, files[idx].hash) == 0) {
+        files[idx].hash_computed = 1;
+    }
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     utilipc_init();
-
-    const char *start_dir = ".";
-    if (argc >= 2) start_dir = argv[1];
+    const char *start_dir = (argc >= 2) ? argv[1] : ".";
 
     printf("%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
-    printf("%s[ fdup - Duplicate File Finder ]%s\n", COLOR_TITLE, COLOR_RESET);
+    printf("%s[ fdup - Turbo Duplicate Finder (Multithreaded) ]%s\n", COLOR_TITLE, COLOR_RESET);
     printf("%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
     printf("  Scanning directory: %s...\n", start_dir);
 
     scan_recursive(start_dir, 1);
-
     if (file_count == 0) {
         printf("No files found.\n");
         free(files);
-        utilipc_close();
         return 0;
     }
 
@@ -251,60 +234,61 @@ int main(int argc, char *argv[]) {
     for (size_t i = 0; i < file_count; i++) {
         if (files[i].group_id != -1) continue;
 
-        size_t match_count = 0;
+        // Verifica se há arquivos com o mesmo tamanho (potenciais duplicados)
+        size_t match_count = 1;
         for (size_t j = i + 1; j < file_count; j++) {
             if (files[j].size != files[i].size) break;
             match_count++;
         }
 
-        if (match_count == 0) continue;
-
-        if (!files[i].hash_computed) {
-            if (compute_file_sha256(files[i].path, files[i].hash) < 0) continue;
-            files[i].hash_computed = 1;
-        }
-
-        int group_found = 0;
-        for (size_t j = i + 1; j < file_count; j++) {
-            if (files[j].size != files[i].size) break;
-
-            if (!files[j].hash_computed) {
-                if (compute_file_sha256(files[j].path, files[j].hash) < 0) continue;
-                files[j].hash_computed = 1;
-            }
-
-            if (memcmp(files[i].hash, files[j].hash, 32) == 0) {
-                if (!group_found) {
-                    current_group++;
-                    files[i].group_id = current_group;
-                    group_found = 1;
-
-                    double size_mb = (double)files[i].size / (1024.0 * 1024.0);
-                    printf("\n%s[Group %d - Size: %s%.2f MB%s | SHA256: ", COLOR_GROUP, current_group, COLOR_SIZE, size_mb, COLOR_GROUP);
-                    for (int h = 0; h < 8; h++) printf("%02x", files[i].hash[h]);
-                    printf("...]%s\n", COLOR_RESET);
-                    printf("  • %s%s%s\n", COLOR_PATH, files[i].path, COLOR_RESET);
+        if (match_count > 1) {
+            // Cria threads para calcular hashes apenas dos arquivos com tamanhos iguais
+            pthread_t *threads = malloc(match_count * sizeof(pthread_t));
+            ThreadArg *args = malloc(match_count * sizeof(ThreadArg));
+            
+            for (size_t k = 0; k < match_count; k++) {
+                args[k].file_index = i + k;
+                if (!files[i+k].hash_computed) {
+                    pthread_create(&threads[k], NULL, hash_worker, &args[k]);
                 }
+            }
 
-                files[j].group_id = current_group;
-                printf("  • %s%s%s\n", COLOR_PATH, files[j].path, COLOR_RESET);
-                total_wasted_bytes += files[i].size;
+            for (size_t k = 0; k < match_count; k++) {
+                if (!files[i+k].hash_computed) {
+                    pthread_join(threads[k], NULL);
+                }
+            }
+            free(threads);
+            free(args);
+
+            // Compara os hashes gerados em paralelo
+            int group_found = 0;
+            for (size_t j = i + 1; j < i + match_count; j++) {
+                if (files[j].group_id != -1) continue;
+                if (files[i].hash_computed && files[j].hash_computed && memcmp(files[i].hash, files[j].hash, 32) == 0) {
+                    if (!group_found) {
+                        current_group++;
+                        files[i].group_id = current_group;
+                        group_found = 1;
+                        double size_mb = (double)files[i].size / (1024.0 * 1024.0);
+                        printf("\n%s[Group %d - Size: %s%.2f MB%s | SHA256: ", COLOR_GROUP, current_group, COLOR_SIZE, size_mb, COLOR_GROUP);
+                        for (int h = 0; h < 8; h++) printf("%02x", files[i].hash[h]);
+                        printf("...]%s\n", COLOR_RESET);
+                        printf("  • %s%s%s\n", COLOR_PATH, files[i].path, COLOR_RESET);
+                    }
+                    files[j].group_id = current_group;
+                    printf("  • %s%s%s\n", COLOR_PATH, files[j].path, COLOR_RESET);
+                    total_wasted_bytes += files[i].size;
+                }
             }
         }
+        i += match_count - 1; // Pula os arquivos já checados
     }
 
     printf("\n%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
     double wasted_mb = (double)total_wasted_bytes / (1024.0 * 1024.0);
-    if (wasted_mb >= 1024.0) {
-        printf("[Done. Duplicate Groups: %d | Wasted Space: %s%.2f GB%s]\n", current_group, COLOR_SIZE, wasted_mb / 1024.0, COLOR_RESET);
-    } else {
-        printf("[Done. Duplicate Groups: %d | Wasted Space: %s%.2f MB%s]\n", current_group, COLOR_SIZE, wasted_mb, COLOR_RESET);
-    }
+    printf("[Done. Duplicate Groups: %d | Wasted Space: %s%.2f MB%s]\n", current_group, COLOR_SIZE, wasted_mb, COLOR_RESET);
     printf("%s==========================================%s\n", COLOR_TITLE, COLOR_RESET);
-
-    char log_msg[UTILIPC_MAX_MSG];
-    snprintf(log_msg, sizeof(log_msg), "fdup: found %d duplicate groups (wasted: %.1fMB)", current_group, wasted_mb);
-    utilipc_write_status(-1, -1, -1, log_msg);
 
     free(files);
     utilipc_close();
