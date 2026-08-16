@@ -7,6 +7,9 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <time.h>
 #include "../libutilipc/utilipc.h"
 
 static void fetch_public_ip(char *out_ip, size_t max_len) {
@@ -25,9 +28,7 @@ static void fetch_public_ip(char *out_ip, size_t max_len) {
         return;
     }
 
-    struct timeval tv;
-    tv.tv_sec = 2;
-    tv.tv_usec = 0;
+    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
@@ -85,16 +86,154 @@ static void call_portcheck(const char *target, const char *port_str) {
     system(cmd);
 }
 
+static int try_read_proc_net(unsigned long long *rx, unsigned long long *tx) {
+    FILE *fp = fopen("/proc/net/dev", "r");
+    if (!fp) return 0;
+    *rx = 0; *tx = 0;
+    char line[256];
+    int count = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strchr(line, ':')) {
+            unsigned long long r_bytes, t_bytes;
+            if (sscanf(strchr(line, ':') + 1, "%llu %*u %*u %*u %*u %*u %*u %*u %llu", &r_bytes, &t_bytes) == 2) {
+                *rx += r_bytes;
+                *tx += t_bytes;
+                count++;
+            }
+        }
+    }
+    fclose(fp);
+    return count > 0;
+}
+
+static double measure_tcp_latency(const char *host, int port) {
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1.0;
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) {
+        freeaddrinfo(res);
+        return -1.0;
+    }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    int conn = connect(fd, res->ai_addr, res->ai_addrlen);
+    double rtt = -1.0;
+
+    if (conn == 0) {
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        rtt = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+    } else if (errno == EINPROGRESS) {
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+        struct timeval tv = { .tv_sec = 1, .tv_usec = 500000 };
+        if (select(fd + 1, NULL, &fds, NULL, &tv) > 0) {
+            int err = 0;
+            socklen_t len = sizeof(err);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+            if (err == 0) {
+                clock_gettime(CLOCK_MONOTONIC, &end);
+                rtt = (end.tv_sec - start.tv_sec) * 1000.0 + (end.tv_nsec - start.tv_nsec) / 1000000.0;
+            }
+        }
+    }
+    close(fd);
+    freeaddrinfo(res);
+    return rtt;
+}
+
+static void run_tui(void) {
+    printf("\033[?25l\033[H\033[J"); // Esconde cursor e limpa tela
+
+    char public_ip[128] = "Fetching...";
+    fetch_public_ip(public_ip, sizeof(public_ip));
+
+    const char *spark[] = {" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"};
+    double history[20] = {0};
+
+    unsigned long long rx_prev = 0, tx_prev = 0;
+    int proc_available = try_read_proc_net(&rx_prev, &tx_prev);
+
+    while (1) {
+        printf("\033[H");
+        printf("\033[1;35m==========================================\033[0m\n");
+        printf("\033[1;35m[ netinfo TUI - Live Network Monitor ]\033[0m\n");
+        printf("\033[1;35m==========================================\033[0m\n");
+        printf("  \033[1;36m• Public IP   :\033[0m %s\033[K\n", public_ip);
+
+        if (proc_available) {
+            sleep(1);
+            unsigned long long rx_now = 0, tx_now = 0;
+            try_read_proc_net(&rx_now, &tx_now);
+            double rx_mbps = (double)(rx_now - rx_prev) / (1024.0 * 1024.0);
+            double tx_mbps = (double)(tx_now - tx_prev) / (1024.0 * 1024.0);
+            rx_prev = rx_now; tx_prev = tx_now;
+
+            for (int i = 0; i < 19; i++) history[i] = history[i+1];
+            history[19] = rx_mbps;
+
+            printf("  \033[1;32m• RX Download : %.2f MB/s\033[0m\033[K\n  ", rx_mbps);
+            for (int i = 0; i < 20; i++) {
+                int idx = (int)(history[i] * 4.0);
+                if (idx > 8) idx = 8; if (idx < 0) idx = 0;
+                printf("\033[1;32m%s\033[0m", spark[idx]);
+            }
+            printf("\n  \033[1;36m• TX Upload   : %.2f MB/s\033[0m\033[K\n", tx_mbps);
+        } else {
+            // Modo Sem Root: Mede latência RTT em tempo real para 1.1.1.1 (Cloudflare DNS)
+            double lat = measure_tcp_latency("1.1.1.1", 53);
+            if (lat < 0) lat = measure_tcp_latency("8.8.8.8", 53);
+
+            for (int i = 0; i < 19; i++) history[i] = history[i+1];
+            history[19] = (lat > 0) ? lat : 0;
+
+            if (lat >= 0) {
+                printf("  \033[1;32m• Live Latency: %.2f ms (Cloudflare DNS)\033[0m\033[K\n  ", lat);
+            } else {
+                printf("  \033[1;31m• Live Latency: Timeout / Offline\033[0m\033[K\n  ");
+            }
+
+            for (int i = 0; i < 20; i++) {
+                int idx = (int)((history[i] / 120.0) * 8.0);
+                if (idx > 8) idx = 8; if (idx < 0) idx = 0;
+                printf("\033[1;32m%s\033[0m", spark[idx]);
+            }
+            printf("\n  \033[0;33m[Android Mode: Active Non-Root Latency Graph]\033[0m\033[K\n");
+            usleep(800000);
+        }
+
+        printf("\033[1;35m==========================================\033[0m\n");
+        printf("[Live Mode - Press Ctrl+C to Exit]\033[0m\033[K\n");
+        fflush(stdout);
+    }
+}
+
 int main(int argc, char *argv[]) {
     utilipc_init();
+
+    if (argc >= 2 && strcmp(argv[1], "-tui") == 0) {
+        run_tui();
+        utilipc_close();
+        return 0;
+    }
 
     if (argc >= 2 && strcmp(argv[1], "-p") == 0) {
         if (argc < 3) {
             printf("Usage: netinfo -p <host> [port]\n");
-            printf("Examples:\n  netinfo -p google.com 443\n  netinfo -p 192.168.1.1\n");
             return 1;
         }
-
         const char *host = argv[2];
         if (argc >= 4) {
             call_portcheck(host, argv[3]);
@@ -121,6 +260,7 @@ int main(int argc, char *argv[]) {
     fetch_public_ip(public_ip, sizeof(public_ip));
     printf("  [Public IP]          : %s\n", public_ip);
     printf("======================\n");
+    printf("Tip: Run 'netinfo -tui' for live monitoring screen.\n");
 
     char log_msg[UTILIPC_MAX_MSG];
     snprintf(log_msg, sizeof(log_msg), "netinfo: Public IP %s", public_ip);

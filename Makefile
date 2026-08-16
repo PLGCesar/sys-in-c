@@ -4,7 +4,7 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help
+TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip
 
 all: $(LIB_IPC) $(TOOLS)
 
@@ -66,13 +66,16 @@ qrcli: src/qrcli/qrcli.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/qrcli/qrcli.c -o qrcli $(LDFLAGS_IPC)
 
 bench: src/bench/bench.c $(LIB_IPC)
-	$(CC) $(CFLAGS) src/bench/bench.c -o bench $(LDFLAGS_IPC)
+	$(CC) $(CFLAGS) -O0 src/bench/bench.c -o bench $(LDFLAGS_IPC)
 
 get-info: src/get-info/get-info.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/get-info/get-info.c -o get-info $(LDFLAGS_IPC)
 
 utils-help: src/utils-help/utils-help.c
 	$(CC) $(CFLAGS) src/utils-help/utils-help.c -o utils-help
+
+netclip: src/netclip/netclip.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/netclip/netclip.c -o netclip $(LDFLAGS_IPC)
 
 free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/main_test.c freestanding/kcalc.c
 	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/main_test.c -o freestanding_test
