@@ -9,6 +9,7 @@
 #include "../freestanding/kstring.h"
 #include "../freestanding/kvfs.h"
 #include "../freestanding/kata.h"
+#include "../freestanding/kata.c"
 
 static kgfx_fb_t os_fb;
 static int os_mode = 0; /* 0 = GUI Mode, 1 = CLI Mode */
@@ -118,7 +119,7 @@ static void draw_gui_desktop(void) {
 
     kgfx_draw_string(&os_fb, 30, 130, "[Kernel Core Subsystems Online]", KGFX_WHITE, 0);
     kgfx_draw_string(&os_fb, 30, 150, "  * Hierarchical VFS  : Mounted Root / with /bin, /etc, /dev", KGFX_CYAN, 0);
-    if (disk->drive_present) {
+    if (disk && disk->drive_present) {
         kgfx_draw_string(&os_fb, 30, 170, "  * ATA PIO Storage   : Primary Master Disk Detected (/dev/ata0)", KGFX_GREEN, 0);
     } else {
         kgfx_draw_string(&os_fb, 30, 170, "  * ATA PIO Storage   : Driver Ready (Primary Bus Active)", KGFX_CYAN, 0);
@@ -185,7 +186,7 @@ static void execute_cli_command(const char *cmd) {
         while (*arg == ' ') arg++;
 
         const kata_drive_info_t *d = kata_get_info();
-        if (!d->drive_present) {
+        if (!d || !d->drive_present) {
             kprintf("  ATA Driver: Primary Master drive offline or not attached.\n");
         } else {
             kprintf("  [ATA PIO Primary Master Drive]:\n");

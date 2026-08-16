@@ -1,3 +1,6 @@
+#ifndef KATA_C_INCLUDED
+#define KATA_C_INCLUDED
+
 #include "kata.h"
 #include "kstring.h"
 
@@ -59,7 +62,6 @@ static int kata_wait_drq(void) {
 int kata_init(void) {
     primary_master.drive_present = 0;
 
-    // Seleciona Master Drive (Drive 0)
     ata_outb(ATA_PRIMARY_IO_BASE + ATA_REG_DRIVE_HEAD, 0xA0);
     kata_wait_400ns();
 
@@ -68,12 +70,11 @@ int kata_init(void) {
     ata_outb(ATA_PRIMARY_IO_BASE + ATA_REG_LBA_MID, 0);
     ata_outb(ATA_PRIMARY_IO_BASE + ATA_REG_LBA_HIGH, 0);
 
-    // Envia comando IDENTIFY (0xEC)
     ata_outb(ATA_PRIMARY_IO_BASE + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
     kata_wait_400ns();
 
     uint8_t status = ata_inb(ATA_PRIMARY_IO_BASE + ATA_REG_STATUS);
-    if (status == 0) return -1; // Sem drive
+    if (status == 0) return -1;
 
     while (status & ATA_SR_BSY) {
         status = ata_inb(ATA_PRIMARY_IO_BASE + ATA_REG_STATUS);
@@ -81,7 +82,7 @@ int kata_init(void) {
 
     uint8_t mid = ata_inb(ATA_PRIMARY_IO_BASE + ATA_REG_LBA_MID);
     uint8_t high = ata_inb(ATA_PRIMARY_IO_BASE + ATA_REG_LBA_HIGH);
-    if (mid != 0 || high != 0) return -1; // Não é ATA padrão (ex: ATAPI)
+    if (mid != 0 || high != 0) return -1;
 
     if (kata_wait_drq() < 0) return -1;
 
@@ -92,7 +93,6 @@ int kata_init(void) {
     primary_master.total_sectors = ((uint32_t)id_buf[61] << 16) | id_buf[60];
     primary_master.size_mb = (primary_master.total_sectors / 2048);
 
-    // Formata Modelo
     int idx = 0;
     for (int i = 27; i <= 46; i++) {
         primary_master.model[idx++] = (char)(id_buf[i] >> 8);
@@ -100,7 +100,6 @@ int kata_init(void) {
     }
     primary_master.model[idx] = '\0';
 
-    // Formata Serial
     idx = 0;
     for (int i = 10; i <= 19; i++) {
         primary_master.serial[idx++] = (char)(id_buf[i] >> 8);
@@ -146,7 +145,7 @@ int kata_write_sector(uint32_t lba, const uint8_t *buffer) {
     if (kata_wait_drq() < 0) return -1;
 
     ata_outsw(ATA_PRIMARY_IO_BASE + ATA_REG_DATA, buffer, 256);
-    kata_outb(ATA_PRIMARY_IO_BASE + ATA_REG_COMMAND, 0xE7); // Cache Flush
+    ata_outb(ATA_PRIMARY_IO_BASE + ATA_REG_COMMAND, 0xE7);
     kata_wait_ready();
     return 0;
 }
@@ -157,3 +156,5 @@ int kata_read_sectors(uint32_t lba, uint8_t count, uint8_t *buffer) {
     }
     return 0;
 }
+
+#endif
