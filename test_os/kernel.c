@@ -8,6 +8,7 @@
 #include "../freestanding/kgfx.h"
 #include "../freestanding/kstring.h"
 #include "../freestanding/kvfs.h"
+#include "../freestanding/kata.h"
 
 static kgfx_fb_t os_fb;
 static int os_mode = 0; /* 0 = GUI Mode, 1 = CLI Mode */
@@ -15,7 +16,7 @@ static int os_mode = 0; /* 0 = GUI Mode, 1 = CLI Mode */
 static char cli_input[128] = "";
 static size_t cli_pos = 0;
 
-/* Buffer de restauração de pixels embaixo do mouse (16x16) */
+/* Buffer de restauração do mouse (16x16) */
 #define MOUSE_BUF_SZ 16
 static uint32_t mouse_under_buf[MOUSE_BUF_SZ * MOUSE_BUF_SZ];
 static int mouse_under_saved = 0;
@@ -27,16 +28,8 @@ static int under_h = 0;
 static int prev_mouse_x = 400;
 static int prev_mouse_y = 300;
 
-static const char sample_readme[] = "Welcome to utils-in-c OS!\nThis file is read from RAM VFS.";
-static const char sample_config[] = "OS_NAME=utils-in-c OS\nVERSION=2.5\nKERNEL=Multiboot1\nVIDEO=VBE800x600";
-static const char sample_script[] = "#!/bin/sh\necho 'Running test script inside OS!'";
-
 static void save_mouse_under(int x, int y, int w, int h) {
-    under_x = x;
-    under_y = y;
-    under_w = w;
-    under_h = h;
-
+    under_x = x; under_y = y; under_w = w; under_h = h;
     for (int r = 0; r < h; r++) {
         for (int c = 0; c < w; c++) {
             int px = x + c;
@@ -53,7 +46,6 @@ static void save_mouse_under(int x, int y, int w, int h) {
 
 static void restore_mouse_under(void) {
     if (!mouse_under_saved) return;
-
     for (int r = 0; r < under_h; r++) {
         for (int c = 0; c < under_w; c++) {
             int px = under_x + c;
@@ -72,13 +64,8 @@ void os_draw_mouse_cursor(void) {
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
     if (mouse->x == prev_mouse_x && mouse->y == prev_mouse_y && mouse_under_saved) return;
 
-    // 1. Restaura os pixels originais onde o mouse estava
     restore_mouse_under();
-
-    // 2. Salva os novos pixels que estão embaixo do mouse
     save_mouse_under(mouse->x, mouse->y, MOUSE_BUF_SZ, MOUSE_BUF_SZ);
-
-    // 3. Desenha o cursor por cima sem apagar nada
     kgfx_draw_cursor(&os_fb, mouse);
 
     prev_mouse_x = mouse->x;
@@ -117,55 +104,106 @@ static void os_putchar(char c) {
 static void draw_gui_desktop(void) {
     kgfx_clear(&os_fb, KGFX_DARKGRAY);
 
-    // Moldura externa com cantos arredondados
     kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 10, KGFX_CYAN, 0);
-
-    // Barra de Título
     kgfx_draw_rect(&os_fb, 12, 12, os_fb.width - 24, 36, KGFX_BLUE, 1);
     kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.5", KGFX_WHITE, KGFX_BLUE, 2);
 
-    // Janela com Alpha Blending (Translúcida com fundo escuro)
     kgfx_draw_rect_alpha(&os_fb, 20, 60, os_fb.width - 40, 45, kgfx_argb(180, 24, 24, 37));
-    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC], [F1] ou [TAB] para abrir o Terminal Interativo CLI!", KGFX_YELLOW, 0);
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC], [F1] ou [TAB] para abrir o Terminal CLI!", KGFX_YELLOW, 0);
 
-    // Formas Geométricas Preenchidas
     kgfx_draw_filled_circle(&os_fb, os_fb.width - 80, 180, 35, KGFX_PURPLE);
-    kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, os_fb.width - 110, 150, os_fb.width - 70, 220, KGFX_GREEN, 1);
+    kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, width - 110, 150, width - 70, 220, KGFX_GREEN, 1);
 
-    // Textos informativos no desktop
+    const kata_drive_info_t *disk = kata_get_info();
+
     kgfx_draw_string(&os_fb, 30, 130, "[Kernel Core Subsystems Online]", KGFX_WHITE, 0);
-    kgfx_draw_string(&os_fb, 30, 150, "  * GDT & IDT Status  : GDT Loaded | IDT Remapped (IRQ 1 & 12 Active)", KGFX_CYAN, 0);
-    kgfx_draw_string(&os_fb, 30, 170, "  * PS/2 Hardware     : Keyboard & Mouse Active with Save/Restore Buffer", KGFX_CYAN, 0);
-    kgfx_draw_string(&os_fb, 30, 190, "  * KVFS Filesystem   : 3 RAM Files Mounted (ls / cat ready in CLI)", KGFX_CYAN, 0);
+    kgfx_draw_string(&os_fb, 30, 150, "  * Hierarchical VFS  : Mounted Root / with /bin, /etc, /dev", KGFX_CYAN, 0);
+    if (disk->drive_present) {
+        kgfx_draw_string(&os_fb, 30, 170, "  * ATA PIO Storage   : Primary Master Disk Detected (/dev/ata0)", KGFX_GREEN, 0);
+    } else {
+        kgfx_draw_string(&os_fb, 30, 170, "  * ATA PIO Storage   : Driver Ready (Primary Bus Active)", KGFX_CYAN, 0);
+    }
+    kgfx_draw_string(&os_fb, 30, 190, "  * PS/2 Controller   : Keyboard & Mouse (IRQ 1 & 12 Active)", KGFX_CYAN, 0);
     kgfx_draw_string(&os_fb, 30, 210, "  * Video System      : VBE 32-bit ARGB + Alpha Blending Active", KGFX_CYAN, 0);
 }
 
-static void vfs_ls_print_cb(const char *name, size_t size, uint16_t mode) {
+static void vfs_ls_callback(const char *name, size_t size, uint8_t type, uint16_t mode) {
     (void)mode;
-    kprintf("  • %-20s : %u bytes\n", name, (unsigned int)size);
+    if (type == KVFS_TYPE_DIR) {
+        kprintf("  \033[1;34m[DIR]\033[0m  %-20s/\n", name);
+    } else if (type == KVFS_TYPE_BIN) {
+        kprintf("  \033[1;32m[BIN]\033[0m  %-20s (%u bytes)\n", name, (unsigned int)size);
+    } else if (type == KVFS_TYPE_DEV) {
+        kprintf("  \033[1;33m[DEV]\033[0m  %-20s\n", name);
+    } else {
+        kprintf("  \033[1;37m[FILE]\033[0m %-20s (%u bytes)\n", name, (unsigned int)size);
+    }
 }
 
 static void execute_cli_command(const char *cmd) {
     kprintf("\n");
+
+    while (*cmd == ' ') cmd++;
+    if (*cmd == '\0') {
+        kprintf("test_os> ");
+        return;
+    }
+
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
-        kprintf("  [utils-in-c OS CLI Help]\n");
-        kprintf("    • ls / dir      : List VFS files (kls)\n");
-        kprintf("    • cat <file>    : Read VFS file contents\n");
-        kprintf("    • mem           : Display KMEM heap stats\n");
-        kprintf("    • clear         : Clear CLI terminal screen\n");
-        kprintf("    • exit          : Switch back to GUI mode\n");
-    } else if (kstrcmp(cmd, "ls") == 0 || kstrcmp(cmd, "dir") == 0) {
-        kprintf("  [VFS File Directory Listing (kls)]:\n");
-        kvfs_list(vfs_ls_print_cb);
+        kprintf("  [utils-in-c OS - VFS Commands]\n");
+        kprintf("    • ls [caminho]  : Listar arquivos (ex: 'ls /', 'ls /bin', 'ls /etc', 'ls /dev')\n");
+        kprintf("    • cat <caminho> : Exibir arquivo (ex: 'cat /etc/os-release', 'cat /dev/ata0')\n");
+        kprintf("    • ata <info|0>  : Interagir com disco ATA PIO\n");
+        kprintf("    • echo <texto>  : Imprimir texto\n");
+        kprintf("    • mem           : Estatisticas da heap KMEM\n");
+        kprintf("    • clear         : Limpar terminal\n");
+        kprintf("    • exit          : Voltar ao modo GUI\n");
+    } else if (kstrncmp(cmd, "ls", 2) == 0) {
+        const char *target = cmd + 2;
+        while (*target == ' ') target++;
+        if (*target == '\0') target = "/";
+
+        kprintf("  [Directory Listing of %s]:\n", target);
+        kvfs_list_dir(target, vfs_ls_callback);
     } else if (kstrncmp(cmd, "cat ", 4) == 0) {
         const char *fname = cmd + 4;
-        const kvfs_file_t *file = kvfs_open(fname);
+        while (*fname == ' ') fname++;
+
+        const kvfs_node_t *file = kvfs_open(fname);
         if (file) {
-            kprintf("  [Contents of %s]:\n", fname);
-            kprintf("    %s\n", (const char *)file->data);
+            kprintf("  [Content of %s]:\n", file->path);
+            if (file->data) {
+                kprintf("%s\n", (const char *)file->data);
+            } else {
+                kprintf("  (Directory / Empty Node)\n");
+            }
         } else {
-            kprintf("  Error: File '%s' not found in VFS.\n", fname);
+            kprintf("  Error: '%s' not found in VFS.\n", fname);
         }
+    } else if (kstrncmp(cmd, "ata", 3) == 0) {
+        const char *arg = cmd + 3;
+        while (*arg == ' ') arg++;
+
+        const kata_drive_info_t *d = kata_get_info();
+        if (!d->drive_present) {
+            kprintf("  ATA Driver: Primary Master drive offline or not attached.\n");
+        } else {
+            kprintf("  [ATA PIO Primary Master Drive]:\n");
+            kprintf("    • Model   : %s\n", d->model);
+            kprintf("    • Serial  : %s\n", d->serial);
+            kprintf("    • Capacity: %u MB (%u sectors)\n", (unsigned int)d->size_mb, (unsigned int)d->total_sectors);
+
+            if (kstrncmp(arg, "read", 4) == 0 || kstrcmp(arg, "0") == 0) {
+                uint8_t sec_buf[512];
+                if (kata_read_sector(0, sec_buf) == 0) {
+                    kprintf("    • Sector 0 (MBR) read successfully! Signature: 0x%02X 0x%02X\n", sec_buf[510], sec_buf[511]);
+                } else {
+                    kprintf("    • Error reading sector 0.\n");
+                }
+            }
+        }
+    } else if (kstrncmp(cmd, "echo ", 5) == 0) {
+        kprintf("  %s\n", cmd + 5);
     } else if (kstrcmp(cmd, "mem") == 0) {
         kprintf("  [KMEM Heap Diagnostics]:\n");
         kprintf("    • Total Memory : %u KB\n", (unsigned int)(kmem_get_total_bytes() / 1024));
@@ -180,8 +218,8 @@ static void execute_cli_command(const char *cmd) {
         mouse_under_saved = 0;
         draw_gui_desktop();
         return;
-    } else if (kstrlen(cmd) > 0) {
-        kprintf("  Unknown command '%s'. Type 'help' for available commands.\n", cmd);
+    } else {
+        kprintf("  Unknown command '%s'. Type 'help' for command list.\n", cmd);
     }
     kprintf("test_os> ");
 }
@@ -228,23 +266,24 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     if (!fb_ptr) fb_ptr = (uint32_t *)0xFD000000;
 
+    // 1. Framebuffer & Text Stream
     kgfx_init(&os_fb, fb_ptr, width, height);
     kset_putchar(os_putchar);
 
+    // 2. Inicializa VFS com /, /bin, /etc, /dev
     kvfs_init();
-    kvfs_create_file("readme.txt", sample_readme, sizeof(sample_readme) - 1, 0644);
-    kvfs_create_file("kernel.config", sample_config, sizeof(sample_config) - 1, 0644);
-    kvfs_create_file("hello.sh", sample_script, sizeof(sample_script) - 1, 0755);
 
+    // 3. Inicializa Drivers de Hardware
     gdt_init();
     idt_init();
     ps2_init();
+    kata_init();
 
-    // Inicializa a Heap
+    // 4. Inicializa Gerenciador de Memória Heap
     static uint8_t os_heap_pool[2 * 1024 * 1024];
     kmem_init(os_heap_pool, sizeof(os_heap_pool));
 
-    // Desenha o Desktop Completo
+    // 5. Renderiza a Interface Gráfica
     draw_gui_desktop();
 
     // Loop Principal
