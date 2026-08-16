@@ -5,12 +5,12 @@
 static kvfs_node_t vfs_table[KVFS_MAX_NODES];
 static size_t vfs_node_count = 0;
 
-static const char etc_hostname[] = "utils-in-c-os\n";
-static const char etc_os_release[] = "NAME=\"utils-in-c OS\"\nVERSION=\"2.5\"\nID=utils-os\nPRETTY_NAME=\"utils-in-c OS v2.5\"\n";
-static const char etc_passwd[] = "root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:User:/home/user:/bin/sh\n";
-static const char etc_kernel_config[] = "KERNEL=Multiboot1\nVIDEO=VBE800x600x32\nVFS=Real_Hierarchical_RAM_ATA\nSMP=Enabled\n";
-static const char etc_motd[] = "==========================================\n Welcome to utils-in-c OS (Kernel v2.5)\n Real VFS & ATA PIO Disk Active!\n==========================================\n";
-static const char readme_root[] = "Welcome to utils-in-c OS VFS Root.\nUse 'cd bin', 'cd etc' or 'cd dev' to explore.\nUse 'cat <file>' to read files.";
+static const char etc_hostname[] = "utils-os\n";
+static const char etc_os_release[] = "NAME=\"utils-in-c OS\"\nVERSION=\"2.6\"\nID=utils-os\n";
+static char etc_passwd_buf[512] = "root:root:0:0:root:/root:/bin/sh\nuser:1234:1000:1000:User:/home/user:/bin/sh\n";
+static const char etc_kernel_config[] = "KERNEL=Multiboot1\nVIDEO=VBE800x600x32\nVFS=KSFS_ATA_PERSISTENT\n";
+static const char etc_motd[] = "Welcome to utils-in-c OS v2.6!\nReal Persistent ATA Disk & Multi-User System Active.\n";
+static const char readme_root[] = "Welcome to utils-in-c OS VFS Root.\nUse 'help' to see all commands.";
 
 static const char dev_null_info[] = "[DEV] Character Device: Null (/dev/null)\n";
 static const char dev_zero_info[] = "[DEV] Character Device: Zero Source (/dev/zero)\n";
@@ -19,16 +19,22 @@ static const char dev_ps2kbd_info[] = "[DEV] Input Device: PS/2 Keyboard on Port
 static const char dev_ps2mouse_info[] = "[DEV] Input Device: PS/2 Mouse on Port 0x60 (IRQ 12)\n";
 static const char dev_ata0_info[] = "[DEV] Block Device: Primary Master ATA PIO Hard Disk on 0x1F0\n";
 
-static const char bin_ls_help[] = "[BIN] ls [dir] - Lista os arquivos e subdiretorios\n";
-static const char bin_cd_help[] = "[BIN] cd <dir> - Navega entre os diretorios do sistema\n";
-static const char bin_pwd_help[] = "[BIN] pwd - Exibe o diretorio de trabalho atual\n";
-static const char bin_cat_help[] = "[BIN] cat <path> - Exibe o conteudo de arquivos ou informacoes de /dev\n";
-static const char bin_mem_help[] = "[BIN] mem - Exibe diagnostico da memoria heap KMEM\n";
-static const char bin_clear_help[] = "[BIN] clear - Limpa o terminal CLI\n";
-static const char bin_echo_help[] = "[BIN] echo <texto> - Imprime texto na tela\n";
-static const char bin_ata_help[] = "[BIN] ata [info|read <lba>] - Interage diretamente com o disco rigido ATA PIO\n";
-static const char bin_help_help[] = "[BIN] help - Exibe a ajuda geral do sistema\n";
-static const char bin_exit_help[] = "[BIN] exit - Retorna ao modo de interface grafica GUI\n";
+static const char bin_ls_help[] = "[BIN] ls [dir] - Lista arquivos\n";
+static const char bin_cd_help[] = "[BIN] cd <dir> - Navega entre pastas\n";
+static const char bin_pwd_help[] = "[BIN] pwd - Diretorio atual\n";
+static const char bin_cat_help[] = "[BIN] cat <path> - Exibe arquivo\n";
+static const char bin_write_help[] = "[BIN] write <path> <texto> - Cria/escreve arquivo persistente no disco\n";
+static const char bin_touch_help[] = "[BIN] touch <path> - Cria arquivo vazio\n";
+static const char bin_mkdir_help[] = "[BIN] mkdir <path> - Cria diretorio\n";
+static const char bin_rm_help[] = "[BIN] rm <path> - Deleta arquivo do disco e da memoria\n";
+static const char bin_whoami_help[] = "[BIN] whoami - Exibe o usuario atual\n";
+static const char bin_su_help[] = "[BIN] su <usuario> - Alterna de usuario com senha\n";
+static const char bin_adduser_help[] = "[BIN] adduser <usuario> <senha> - Cria novo usuario\n";
+static const char bin_mem_help[] = "[BIN] mem - Heap KMEM\n";
+static const char bin_clear_help[] = "[BIN] clear - Limpa tela\n";
+static const char bin_ata_help[] = "[BIN] ata [info|0] - Testa disco ATA\n";
+static const char bin_format_help[] = "[BIN] format_disk - Formata disk.img com KSFS\n";
+static const char bin_exit_help[] = "[BIN] exit - Retorna ao GUI\n";
 
 static void sanitize_path(const char *in, char *out, size_t max_len) {
     size_t j = 0;
@@ -46,12 +52,14 @@ static void sanitize_path(const char *in, char *out, size_t max_len) {
 
 void kvfs_init(void) {
     for (size_t i = 0; i < KVFS_MAX_NODES; i++) {
+        if (vfs_table[i].is_used && vfs_table[i].is_dynamic && vfs_table[i].data) {
+            kfree((void *)vfs_table[i].data);
+        }
         vfs_table[i].is_used = 0;
+        vfs_table[i].is_dynamic = 0;
         vfs_table[i].path[0] = '\0';
         vfs_table[i].data = NULL;
         vfs_table[i].size = 0;
-        vfs_table[i].type = KVFS_TYPE_FILE;
-        vfs_table[i].mode = 0;
     }
     vfs_node_count = 0;
 
@@ -59,6 +67,8 @@ void kvfs_init(void) {
     kvfs_mkdir("/bin");
     kvfs_mkdir("/etc");
     kvfs_mkdir("/dev");
+    kvfs_mkdir("/home");
+    kvfs_mkdir("/home/user");
 
     kvfs_create("/readme.txt", readme_root, sizeof(readme_root) - 1, KVFS_TYPE_FILE, 0644);
 
@@ -66,16 +76,22 @@ void kvfs_init(void) {
     kvfs_create("/bin/cd", bin_cd_help, sizeof(bin_cd_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/pwd", bin_pwd_help, sizeof(bin_pwd_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/cat", bin_cat_help, sizeof(bin_cat_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/write", bin_write_help, sizeof(bin_write_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/touch", bin_touch_help, sizeof(bin_touch_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/mkdir", bin_mkdir_help, sizeof(bin_mkdir_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/rm", bin_rm_help, sizeof(bin_rm_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/whoami", bin_whoami_help, sizeof(bin_whoami_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/su", bin_su_help, sizeof(bin_su_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/adduser", bin_adduser_help, sizeof(bin_adduser_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/mem", bin_mem_help, sizeof(bin_mem_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/clear", bin_clear_help, sizeof(bin_clear_help) - 1, KVFS_TYPE_BIN, 0755);
-    kvfs_create("/bin/echo", bin_echo_help, sizeof(bin_echo_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/ata", bin_ata_help, sizeof(bin_ata_help) - 1, KVFS_TYPE_BIN, 0755);
-    kvfs_create("/bin/help", bin_help_help, sizeof(bin_help_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/format_disk", bin_format_help, sizeof(bin_format_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/exit", bin_exit_help, sizeof(bin_exit_help) - 1, KVFS_TYPE_BIN, 0755);
 
     kvfs_create("/etc/hostname", etc_hostname, sizeof(etc_hostname) - 1, KVFS_TYPE_FILE, 0644);
     kvfs_create("/etc/os-release", etc_os_release, sizeof(etc_os_release) - 1, KVFS_TYPE_FILE, 0644);
-    kvfs_create("/etc/passwd", etc_passwd, sizeof(etc_passwd) - 1, KVFS_TYPE_FILE, 0644);
+    kvfs_create("/etc/passwd", etc_passwd_buf, sizeof(etc_passwd_buf) - 1, KVFS_TYPE_FILE, 0644);
     kvfs_create("/etc/kernel.config", etc_kernel_config, sizeof(etc_kernel_config) - 1, KVFS_TYPE_FILE, 0644);
     kvfs_create("/etc/motd", etc_motd, sizeof(etc_motd) - 1, KVFS_TYPE_FILE, 0644);
 
@@ -97,6 +113,19 @@ int kvfs_create(const char *path, const void *data, size_t size, uint8_t type, u
     char clean_path[KVFS_MAX_PATH];
     sanitize_path(path, clean_path, sizeof(clean_path));
 
+    // Se já existir, sobrescreve
+    for (size_t i = 0; i < KVFS_MAX_NODES; i++) {
+        if (vfs_table[i].is_used && kstrcmp(vfs_table[i].path, clean_path) == 0) {
+            if (vfs_table[i].is_dynamic && vfs_table[i].data) kfree((void *)vfs_table[i].data);
+            vfs_table[i].data = (const uint8_t *)data;
+            vfs_table[i].size = size;
+            vfs_table[i].type = type;
+            vfs_table[i].mode = mode;
+            vfs_table[i].is_dynamic = 0;
+            return 0;
+        }
+    }
+
     for (size_t i = 0; i < KVFS_MAX_NODES; i++) {
         if (!vfs_table[i].is_used) {
             kstrncpy(vfs_table[i].path, clean_path, sizeof(vfs_table[i].path) - 1);
@@ -105,7 +134,64 @@ int kvfs_create(const char *path, const void *data, size_t size, uint8_t type, u
             vfs_table[i].type = type;
             vfs_table[i].mode = mode;
             vfs_table[i].is_used = 1;
+            vfs_table[i].is_dynamic = 0;
             vfs_node_count++;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int kvfs_write(const char *path, const void *data, size_t size) {
+    char clean_path[KVFS_MAX_PATH];
+    sanitize_path(path, clean_path, sizeof(clean_path));
+
+    uint8_t *heap_copy = kmalloc(size + 1);
+    if (!heap_copy) return -1;
+    if (data) kmemcpy(heap_copy, data, size);
+    heap_copy[size] = '\0';
+
+    for (size_t i = 0; i < KVFS_MAX_NODES; i++) {
+        if (vfs_table[i].is_used && kstrcmp(vfs_table[i].path, clean_path) == 0) {
+            if (vfs_table[i].is_dynamic && vfs_table[i].data) kfree((void *)vfs_table[i].data);
+            vfs_table[i].data = heap_copy;
+            vfs_table[i].size = size;
+            vfs_table[i].is_dynamic = 1;
+            return 0;
+        }
+    }
+
+    for (size_t i = 0; i < KVFS_MAX_NODES; i++) {
+        if (!vfs_table[i].is_used) {
+            kstrncpy(vfs_table[i].path, clean_path, sizeof(vfs_table[i].path) - 1);
+            vfs_table[i].data = heap_copy;
+            vfs_table[i].size = size;
+            vfs_table[i].type = KVFS_TYPE_FILE;
+            vfs_table[i].mode = 0644;
+            vfs_table[i].is_used = 1;
+            vfs_table[i].is_dynamic = 1;
+            vfs_node_count++;
+            return 0;
+        }
+    }
+
+    kfree(heap_copy);
+    return -1;
+}
+
+int kvfs_delete(const char *path) {
+    char clean_path[KVFS_MAX_PATH];
+    sanitize_path(path, clean_path, sizeof(clean_path));
+
+    for (size_t i = 0; i < KVFS_MAX_NODES; i++) {
+        if (vfs_table[i].is_used && kstrcmp(vfs_table[i].path, clean_path) == 0) {
+            if (vfs_table[i].is_dynamic && vfs_table[i].data) {
+                kfree((void *)vfs_table[i].data);
+            }
+            vfs_table[i].is_used = 0;
+            vfs_table[i].path[0] = '\0';
+            vfs_table[i].data = NULL;
+            if (vfs_node_count > 0) vfs_node_count--;
             return 0;
         }
     }

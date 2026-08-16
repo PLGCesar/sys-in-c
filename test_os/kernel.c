@@ -10,32 +10,31 @@
 #include "../freestanding/kvfs.h"
 #include "../freestanding/kata.h"
 #include "../freestanding/kata.c"
+#include "../freestanding/kdiskfs.h"
+#include "../freestanding/kdiskfs.c"
 
 static kgfx_fb_t os_fb;
-static int os_mode = 0; /* 0 = GUI Mode, 1 = CLI Mode */
+static int os_mode = 0; /* 0 = GUI, 1 = CLI */
 
 static char cli_input[128] = "";
 static size_t cli_pos = 0;
 static char current_dir[KVFS_MAX_PATH] = "/";
 
-/* Buffer de restauração do mouse (16x16) */
+/* Sistema de Usuários */
+static char current_user[32] = "root";
+static int is_root = 1;
+
 #define MOUSE_BUF_SZ 16
 static uint32_t mouse_under_buf[MOUSE_BUF_SZ * MOUSE_BUF_SZ];
 static int mouse_under_saved = 0;
-static int under_x = 0;
-static int under_y = 0;
-static int under_w = 0;
-static int under_h = 0;
-
-static int prev_mouse_x = 400;
-static int prev_mouse_y = 300;
+static int under_x = 0, under_y = 0, under_w = 0, under_h = 0;
+static int prev_mouse_x = 400, prev_mouse_y = 300;
 
 static void save_mouse_under(int x, int y, int w, int h) {
     under_x = x; under_y = y; under_w = w; under_h = h;
     for (int r = 0; r < h; r++) {
         for (int c = 0; c < w; c++) {
-            int px = x + c;
-            int py = y + r;
+            int px = x + c, py = y + r;
             if (px >= 0 && (uint32_t)px < os_fb.width && py >= 0 && (uint32_t)py < os_fb.height) {
                 mouse_under_buf[r * MOUSE_BUF_SZ + c] = os_fb.buffer[py * os_fb.pitch + px];
             } else {
@@ -50,8 +49,7 @@ static void restore_mouse_under(void) {
     if (!mouse_under_saved) return;
     for (int r = 0; r < under_h; r++) {
         for (int c = 0; c < under_w; c++) {
-            int px = under_x + c;
-            int py = under_y + r;
+            int px = under_x + c, py = under_y + r;
             if (px >= 0 && (uint32_t)px < os_fb.width && py >= 0 && (uint32_t)py < os_fb.height) {
                 os_fb.buffer[py * os_fb.pitch + px] = mouse_under_buf[r * MOUSE_BUF_SZ + c];
             }
@@ -62,7 +60,6 @@ static void restore_mouse_under(void) {
 
 void os_draw_mouse_cursor(void) {
     if (os_mode != 0) return;
-
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
     if (mouse->x == prev_mouse_x && mouse->y == prev_mouse_y && mouse_under_saved) return;
 
@@ -103,12 +100,16 @@ static void os_putchar(char c) {
     }
 }
 
+static void print_prompt(void) {
+    kprintf("%s@utils-os:%s%c ", current_user, current_dir, is_root ? '#' : '$');
+}
+
 static void draw_gui_desktop(void) {
     kgfx_clear(&os_fb, KGFX_DARKGRAY);
 
     kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 10, KGFX_CYAN, 0);
     kgfx_draw_rect(&os_fb, 12, 12, os_fb.width - 24, 36, KGFX_BLUE, 1);
-    kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.5", KGFX_WHITE, KGFX_BLUE, 2);
+    kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.6 (Persistent Disk & Multi-User)", KGFX_WHITE, KGFX_BLUE, 2);
 
     kgfx_draw_rect_alpha(&os_fb, 20, 60, os_fb.width - 40, 45, kgfx_argb(180, 24, 24, 37));
     kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC], [F1] ou [TAB] para abrir o Terminal CLI!", KGFX_YELLOW, 0);
@@ -119,13 +120,13 @@ static void draw_gui_desktop(void) {
     const kata_drive_info_t *disk = kata_get_info();
 
     kgfx_draw_string(&os_fb, 30, 130, "[Kernel Core Subsystems Online]", KGFX_WHITE, 0);
-    kgfx_draw_string(&os_fb, 30, 150, "  * Hierarchical VFS  : Mounted Root / with /bin, /etc, /dev", KGFX_CYAN, 0);
+    kgfx_draw_string(&os_fb, 30, 150, "  * Persistent KSFS   : Root / with /bin, /etc, /dev, /home on ATA PIO", KGFX_CYAN, 0);
     if (disk && disk->drive_present) {
-        kgfx_draw_string(&os_fb, 30, 170, "  * ATA PIO Storage   : Primary Master Disk Detected (/dev/ata0)", KGFX_GREEN, 0);
+        kgfx_draw_string(&os_fb, 30, 170, "  * ATA Storage Mode  : disk.img Mounted & Read/Write Ready", KGFX_GREEN, 0);
     } else {
-        kgfx_draw_string(&os_fb, 30, 170, "  * ATA PIO Storage   : Driver Ready (Primary Bus Active)", KGFX_CYAN, 0);
+        kgfx_draw_string(&os_fb, 30, 170, "  * ATA Storage Mode  : Standalone RAM Mode", KGFX_CYAN, 0);
     }
-    kgfx_draw_string(&os_fb, 30, 190, "  * PS/2 Controller   : Keyboard & Mouse (IRQ 1 & 12 Active)", KGFX_CYAN, 0);
+    kgfx_draw_string(&os_fb, 30, 190, "  * Multi-User Engine : User Authentication Active (whoami / su / adduser)", KGFX_CYAN, 0);
     kgfx_draw_string(&os_fb, 30, 210, "  * Video System      : VBE 32-bit ARGB + Alpha Blending Active", KGFX_CYAN, 0);
 }
 
@@ -148,19 +149,16 @@ static void resolve_path(const char *input_path, char *out, size_t max_len) {
         out[max_len - 1] = '\0';
         return;
     }
-
     if (input_path[0] == '/') {
         kstrncpy(out, input_path, max_len - 1);
         out[max_len - 1] = '\0';
         return;
     }
-
     if (kstrcmp(input_path, ".") == 0) {
         kstrncpy(out, current_dir, max_len - 1);
         out[max_len - 1] = '\0';
         return;
     }
-
     if (kstrcmp(input_path, "..") == 0) {
         if (kstrcmp(current_dir, "/") == 0) {
             kstrncpy(out, "/", max_len - 1);
@@ -172,7 +170,6 @@ static void resolve_path(const char *input_path, char *out, size_t max_len) {
         }
         return;
     }
-
     if (kstrcmp(current_dir, "/") == 0) {
         ksnprintf(out, max_len, "/%s", input_path);
     } else {
@@ -180,26 +177,184 @@ static void resolve_path(const char *input_path, char *out, size_t max_len) {
     }
 }
 
+static int verify_user_password(const char *user, const char *pass) {
+    const kvfs_node_t *passwd_file = kvfs_open("/etc/passwd");
+    if (!passwd_file || !passwd_file->data) {
+        if (kstrcmp(user, "root") == 0 && kstrcmp(pass, "root") == 0) return 1;
+        return 0;
+    }
+
+    const char *data = (const char *)passwd_file->data;
+    char target_prefix[64];
+    ksnprintf(target_prefix, sizeof(target_prefix), "%s:%s:", user, pass);
+
+    if (kstrncmp(data, target_prefix, kstrlen(target_prefix)) == 0) return 1;
+
+    char line_prefix[64];
+    ksnprintf(line_prefix, sizeof(line_prefix), "\n%s:%s:", user, pass);
+    if (kstrstr(data, line_prefix) != NULL) return 1;
+
+    return 0;
+}
+
 static void execute_cli_command(const char *cmd) {
     kprintf("\n");
-
     while (*cmd == ' ') cmd++;
     if (*cmd == '\0') {
-        kprintf("test_os:%s> ", current_dir);
+        print_prompt();
         return;
     }
 
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
-        kprintf("  [utils-in-c OS - VFS Commands]\n");
-        kprintf("    • ls [caminho]  : Listar arquivos (ex: 'ls', 'ls /bin', 'ls /etc')\n");
-        kprintf("    • cd [caminho]  : Navegar entre pastas (ex: 'cd etc', 'cd ..', 'cd /')\n");
-        kprintf("    • pwd           : Exibir diretorio atual\n");
-        kprintf("    • cat <caminho> : Exibir arquivo (ex: 'cat os-release', 'cat /dev/ata0')\n");
-        kprintf("    • ata <info|0>  : Interagir com disco ATA PIO\n");
-        kprintf("    • echo <texto>  : Imprimir texto\n");
-        kprintf("    • mem           : Estatisticas da heap KMEM\n");
-        kprintf("    • clear         : Limpar terminal\n");
-        kprintf("    • exit          : Voltar ao modo GUI\n");
+        kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema]\n");
+        kprintf("    • ls [dir]           : Listar arquivos e pastas\n");
+        kprintf("    • cd <dir>           : Navegar entre pastas\n");
+        kprintf("    • pwd                : Exibir diretorio atual\n");
+        kprintf("    • cat <arquivo>      : Exibir conteudo de arquivo ou dispositivo\n");
+        kprintf("    • write <arq> <txt>  : Escrever texto e salvar no disco persistentemente\n");
+        kprintf("    • touch <arquivo>    : Criar arquivo vazio no disco\n");
+        kprintf("    • mkdir <pasta>      : Criar diretorio\n");
+        kprintf("    • rm <arquivo>       : Deletar arquivo do disco e da memoria\n");
+        kprintf("    • whoami             : Exibir usuario atual\n");
+        kprintf("    • su <usuario> [pwd] : Alternar usuario (padrao root:root, user:1234)\n");
+        kprintf("    • adduser <usr> <pwd>: Criar novo usuario e gravar em /etc/passwd\n");
+        kprintf("    • ata [info|0]       : Diagnostico do disco ATA PIO\n");
+        kprintf("    • format_disk        : Formatar disk.img com novo Superbloco KSFS\n");
+        kprintf("    • mem                : Memoria heap KMEM\n");
+        kprintf("    • clear              : Limpar tela\n");
+        kprintf("    • exit               : Voltar ao modo GUI\n");
+    } else if (kstrcmp(cmd, "whoami") == 0) {
+        kprintf("  %s (UID: %d, %s)\n", current_user, is_root ? 0 : 1000, is_root ? "Superuser" : "Standard User");
+    } else if (kstrncmp(cmd, "su", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
+        const char *target = cmd + 2;
+        while (*target == ' ') target++;
+        if (*target == '\0') target = "root";
+
+        char user[32] = "", pass[32] = "";
+        const char *space = kstrchr(target, ' ');
+        if (space) {
+            size_t ulen = space - target;
+            if (ulen < sizeof(user)) {
+                kstrncpy(user, target, ulen);
+                user[ulen] = '\0';
+            }
+            kstrncpy(pass, space + 1, sizeof(pass) - 1);
+        } else {
+            kstrncpy(user, target, sizeof(user) - 1);
+            kstrncpy(pass, (kstrcmp(user, "root") == 0) ? "root" : "1234", sizeof(pass) - 1);
+        }
+
+        if (verify_user_password(user, pass)) {
+            kstrncpy(current_user, user, sizeof(current_user) - 1);
+            is_root = (kstrcmp(user, "root") == 0);
+            if (is_root) {
+                kstrncpy(current_dir, "/", sizeof(current_dir) - 1);
+            } else {
+                ksnprintf(current_dir, sizeof(current_dir), "/home/%s", user);
+                if (!kvfs_open(current_dir)) kvfs_mkdir(current_dir);
+            }
+            kprintf("  Logged in as '%s'\n", current_user);
+        } else {
+            kprintf("  su: Authentication failure\n");
+        }
+    } else if (kstrncmp(cmd, "adduser ", 8) == 0) {
+        if (!is_root) {
+            kprintf("  adduser: Permission denied (only root can add users)\n");
+        } else {
+            const char *args = cmd + 8;
+            while (*args == ' ') args++;
+            const char *space = kstrchr(args, ' ');
+            if (!space) {
+                kprintf("  Usage: adduser <username> <password>\n");
+            } else {
+                char new_user[32] = "", new_pass[32] = "";
+                size_t ulen = space - args;
+                if (ulen < sizeof(new_user)) {
+                    kstrncpy(new_user, args, ulen);
+                    new_user[ulen] = '\0';
+                }
+                kstrncpy(new_pass, space + 1, sizeof(new_pass) - 1);
+
+                char new_entry[128];
+                ksnprintf(new_entry, sizeof(new_entry), "%s:%s:1001:1001:%s:/home/%s:/bin/sh\n", new_user, new_pass, new_user, new_user);
+
+                const kvfs_node_t *pf = kvfs_open("/etc/passwd");
+                char updated_passwd[1024] = "";
+                if (pf && pf->data) kstrncpy(updated_passwd, (const char *)pf->data, sizeof(updated_passwd) - 1);
+                kstrncat(updated_passwd, new_entry, sizeof(updated_passwd) - kstrlen(updated_passwd) - 1);
+
+                kvfs_write("/etc/passwd", updated_passwd, kstrlen(updated_passwd));
+                kdiskfs_save_file("/etc/passwd", updated_passwd, kstrlen(updated_passwd), KVFS_TYPE_FILE, 0644);
+
+                char home_dir[64];
+                ksnprintf(home_dir, sizeof(home_dir), "/home/%s", new_user);
+                kvfs_mkdir(home_dir);
+                kdiskfs_save_file(home_dir, NULL, 0, KVFS_TYPE_DIR, 0755);
+
+                kprintf("  User '%s' created successfully and saved to disk (/etc/passwd & %s)\n", new_user, home_dir);
+            }
+        }
+    } else if (kstrncmp(cmd, "write ", 6) == 0) {
+        const char *args = cmd + 6;
+        while (*args == ' ') args++;
+        const char *space = kstrchr(args, ' ');
+        if (!space) {
+            kprintf("  Usage: write <filepath> <text>\n");
+        } else {
+            char target_file[KVFS_MAX_PATH] = "";
+            size_t flen = space - args;
+            if (flen < sizeof(target_file)) {
+                kstrncpy(target_file, args, flen);
+                target_file[flen] = '\0';
+            }
+            char resolved[KVFS_MAX_PATH];
+            resolve_path(target_file, resolved, sizeof(resolved));
+
+            const char *text = space + 1;
+            size_t tlen = kstrlen(text);
+
+            kvfs_write(resolved, text, tlen);
+            kdiskfs_save_file(resolved, text, tlen, KVFS_TYPE_FILE, 0644);
+
+            kprintf("  [✔] File '%s' written & persisted to disk (%u bytes)\n", resolved, (unsigned int)tlen);
+        }
+    } else if (kstrncmp(cmd, "touch ", 6) == 0) {
+        const char *target = cmd + 6;
+        while (*target == ' ') target++;
+        char resolved[KVFS_MAX_PATH];
+        resolve_path(target, resolved, sizeof(resolved));
+
+        kvfs_write(resolved, "", 0);
+        kdiskfs_save_file(resolved, "", 0, KVFS_TYPE_FILE, 0644);
+        kprintf("  [✔] File '%s' created on disk\n", resolved);
+    } else if (kstrncmp(cmd, "mkdir ", 6) == 0) {
+        const char *target = cmd + 6;
+        while (*target == ' ') target++;
+        char resolved[KVFS_MAX_PATH];
+        resolve_path(target, resolved, sizeof(resolved));
+
+        kvfs_mkdir(resolved);
+        kdiskfs_save_file(resolved, NULL, 0, KVFS_TYPE_DIR, 0755);
+        kprintf("  [✔] Directory '%s' created on disk\n", resolved);
+    } else if (kstrncmp(cmd, "rm ", 3) == 0) {
+        const char *target = cmd + 3;
+        while (*target == ' ') target++;
+        char resolved[KVFS_MAX_PATH];
+        resolve_path(target, resolved, sizeof(resolved));
+
+        kvfs_delete(resolved);
+        kdiskfs_delete_file(resolved);
+        kprintf("  [✔] File '%s' deleted from disk & memory\n", resolved);
+    } else if (kstrcmp(cmd, "format_disk") == 0) {
+        if (!is_root) {
+            kprintf("  format_disk: Permission denied (must be root)\n");
+        } else {
+            if (kdiskfs_format() == 0) {
+                kprintf("  [✔] disk.img formatted with fresh KSFS Superblock!\n");
+            } else {
+                kprintf("  format_disk: Error communicating with ATA drive\n");
+            }
+        }
     } else if (kstrncmp(cmd, "cd", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
         const char *target = cmd + 2;
         while (*target == ' ') target++;
@@ -238,10 +393,12 @@ static void execute_cli_command(const char *cmd) {
         const kvfs_node_t *file = kvfs_open(resolved);
         if (file) {
             kprintf("  [Content of %s]:\n", file->path);
-            if (file->data) {
+            if (file->data && file->size > 0) {
                 kprintf("%s\n", (const char *)file->data);
+            } else if (file->type == KVFS_TYPE_DIR) {
+                kprintf("  (Directory Node)\n");
             } else {
-                kprintf("  (Directory / Empty Node)\n");
+                kprintf("  (Empty File)\n");
             }
         } else {
             kprintf("  cat: '%s': No such file or directory\n", fname);
@@ -288,7 +445,7 @@ static void execute_cli_command(const char *cmd) {
         kprintf("  Unknown command '%s'. Type 'help' for command list.\n", cmd);
     }
 
-    kprintf("test_os:%s> ", current_dir);
+    print_prompt();
 }
 
 void os_handle_keypress(char c) {
@@ -320,7 +477,7 @@ void os_toggle_cli_mode(void) {
         kgfx_clear(&os_fb, KGFX_BLACK);
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         kprintf("\n[Interactive Kernel CLI Terminal Active - Type 'help' or press ESC to exit]\n\n");
-        kprintf("test_os:%s> ", current_dir);
+        print_prompt();
     } else {
         mouse_under_saved = 0;
         draw_gui_desktop();
@@ -339,14 +496,19 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     kgfx_init(&os_fb, fb_ptr, width, height);
     kset_putchar(os_putchar);
 
+    // 1. Inicializa Heap KMEM primeiro
+    static uint8_t os_heap_pool[2 * 1024 * 1024];
+    kmem_init(os_heap_pool, sizeof(os_heap_pool));
+
+    // 2. Inicializa VFS e Hardware
     kvfs_init();
     gdt_init();
     idt_init();
     ps2_init();
     kata_init();
 
-    static uint8_t os_heap_pool[2 * 1024 * 1024];
-    kmem_init(os_heap_pool, sizeof(os_heap_pool));
+    // 3. Monta o Sistema de Arquivos Persistente do Disco ATA
+    kdiskfs_mount();
 
     draw_gui_desktop();
 
