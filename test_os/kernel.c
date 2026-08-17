@@ -29,6 +29,23 @@ static char current_dir[KVFS_MAX_PATH] = "/";
 static char current_user[32] = "root";
 static int is_root = 1;
 
+/* --- TERMINAL MATRIX EM RAM (90 colunas x 36 linhas) --- */
+#define TERM_COLS 90
+#define TERM_ROWS 36
+#define TERM_X_START 30
+#define TERM_Y_START 48
+#define TERM_CHAR_W 8
+#define TERM_CHAR_H 14
+
+typedef struct {
+    char c;
+    uint32_t fg;
+} term_cell_t;
+
+static term_cell_t term_matrix[TERM_ROWS][TERM_COLS];
+static int term_col = 0;
+static int term_row = 0;
+
 /* Editor KEDIT */
 #define EDIT_BUF_SZ 4096
 static char edit_buf[EDIT_BUF_SZ];
@@ -263,6 +280,7 @@ static void handle_calc_click(const char *label) {
 }
 
 static void render_calc_window(void) {
+    mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_DARKGRAY);
 
     kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X, CALC_WIN_Y, CALC_WIN_W, CALC_WIN_H, 10, KGFX_PURPLE, 1);
@@ -282,6 +300,7 @@ static void render_calc_window(void) {
 }
 
 void os_draw_mouse_cursor(void) {
+    if (os_mode != 0 && os_mode != 5) return;
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
 
     if (os_mode == 0) {
@@ -289,11 +308,7 @@ void os_draw_mouse_cursor(void) {
         int over_game = kgfx_rect_contains(&game_btn, mouse->x, mouse->y);
         int over_calc = kgfx_rect_contains(&calc_btn, mouse->x, mouse->y);
 
-        if (over_btn || over_game || over_calc) {
-            mouse->type = KGFX_CURSOR_CLICKABLE;
-        } else {
-            mouse->type = KGFX_CURSOR_NORMAL;
-        }
+        mouse->type = (over_btn || over_game || over_calc) ? KGFX_CURSOR_CLICKABLE : KGFX_CURSOR_NORMAL;
 
         if (over_btn) {
             if ((mouse->buttons & 1) && !btn_pressed_prev) {
@@ -342,7 +357,10 @@ void os_draw_mouse_cursor(void) {
 
     if (mouse->x == prev_mouse_x && mouse->y == prev_mouse_y && mouse_under_saved) return;
 
-    restore_mouse_under();
+    if (mouse_under_saved) {
+        restore_mouse_under();
+    }
+
     save_mouse_under(mouse->x, mouse->y, MOUSE_BUF_SZ, MOUSE_BUF_SZ);
     kgfx_draw_cursor(&os_fb, mouse);
 
@@ -350,52 +368,68 @@ void os_draw_mouse_cursor(void) {
     prev_mouse_y = mouse->y;
 }
 
-/* --- ROLAGEM INSTANTANEA DO TERMINAL VIA COPIA EM BLOCO --- */
-static void terminal_scroll_up(void) {
-    int line_h = 14;
-    int start_y = 40;
-    int end_y = (int)os_fb.height - 50;
-    int scroll_w = (int)os_fb.width - 60; // 740 pixels
+/* --- RENDERIZACAO DO CONSOLE MATRIX EM RAM (INSTANTANEO) --- */
+static void render_term_matrix(void) {
+    kgfx_draw_rect(&os_fb, TERM_X_START, TERM_Y_START, TERM_COLS * TERM_CHAR_W, TERM_ROWS * TERM_CHAR_H, KGFX_BLACK, 1);
 
-    for (int y = start_y; y <= end_y - line_h; y++) {
-        uint32_t *dst = &os_fb.buffer[y * os_fb.pitch + 30];
-        const uint32_t *src = &os_fb.buffer[(y + line_h) * os_fb.pitch + 30];
-        kmemcpy(dst, src, scroll_w * sizeof(uint32_t));
-    }
-
-    // Limpa apenas a ultima linha
-    for (int y = end_y - line_h + 1; y <= end_y; y++) {
-        uint32_t *dst = &os_fb.buffer[y * os_fb.pitch + 30];
-        for (int x = 0; x < scroll_w; x++) {
-            dst[x] = KGFX_BLACK;
+    for (int r = 0; r < TERM_ROWS; r++) {
+        int py = TERM_Y_START + r * TERM_CHAR_H;
+        for (int c = 0; c < TERM_COLS; c++) {
+            char ch = term_matrix[r][c].c;
+            if (ch > 32 && ch <= 126) {
+                uint32_t color = term_matrix[r][c].fg ? term_matrix[r][c].fg : KGFX_WHITE;
+                kgfx_draw_char(&os_fb, TERM_X_START + c * TERM_CHAR_W, py, ch, color, 0);
+            }
         }
     }
 }
 
-static void os_putchar(char c) {
-    static int cursor_x = 30;
-    static int cursor_y = 120;
+static void term_scroll_ram(void) {
+    // Move linhas para cima na RAM (2.8 KB = 0.00001 segundos)
+    kmemmove(&term_matrix[0][0], &term_matrix[1][0], sizeof(term_cell_t) * TERM_COLS * (TERM_ROWS - 1));
+    kmemset(&term_matrix[TERM_ROWS - 1][0], 0, sizeof(term_cell_t) * TERM_COLS);
+    term_row = TERM_ROWS - 1;
+    render_term_matrix();
+}
 
+static void os_putchar(char c) {
     if (c == '\n') {
-        cursor_x = 30;
-        cursor_y += 14;
-    } else if (c == '\b') {
-        if (cursor_x >= 38) {
-            cursor_x -= 8;
-            kgfx_draw_rect(&os_fb, cursor_x, cursor_y, 8, 12, (os_mode == 1) ? KGFX_BLACK : KGFX_DARKGRAY, 1);
+        term_col = 0;
+        term_row++;
+        if (term_row >= TERM_ROWS) {
+            term_scroll_ram();
         }
-    } else if ((unsigned char)c >= 32) {
-        kgfx_draw_char(&os_fb, cursor_x, cursor_y, c, KGFX_WHITE, 0);
-        cursor_x += 8;
-        if (cursor_x > (int)os_fb.width - 50) {
-            cursor_x = 30;
-            cursor_y += 14;
-        }
+        return;
     }
 
-    if (cursor_y > (int)os_fb.height - 50) {
-        terminal_scroll_up();
-        cursor_y -= 14;
+    if (c == '\b') {
+        if (term_col > 0) {
+            term_col--;
+            term_matrix[term_row][term_col].c = ' ';
+            kgfx_draw_rect(&os_fb, TERM_X_START + term_col * TERM_CHAR_W, TERM_Y_START + term_row * TERM_CHAR_H, TERM_CHAR_W, TERM_CHAR_H, KGFX_BLACK, 1);
+        }
+        return;
+    }
+
+    if ((unsigned char)c >= 32) {
+        if (term_row >= TERM_ROWS) {
+            term_scroll_ram();
+        }
+
+        term_matrix[term_row][term_col].c = c;
+        term_matrix[term_row][term_col].fg = KGFX_WHITE;
+
+        // Desenha apenas o caractere atual no framebuffer
+        kgfx_draw_char(&os_fb, TERM_X_START + term_col * TERM_CHAR_W, TERM_Y_START + term_row * TERM_CHAR_H, c, KGFX_WHITE, 0);
+        term_col++;
+
+        if (term_col >= TERM_COLS) {
+            term_col = 0;
+            term_row++;
+            if (term_row >= TERM_ROWS) {
+                term_scroll_ram();
+            }
+        }
     }
 }
 
@@ -404,6 +438,7 @@ static void print_prompt(void) {
 }
 
 static void draw_gui_desktop(void) {
+    mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_DARKGRAY);
 
     kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 10, KGFX_CYAN, 0);
@@ -442,7 +477,7 @@ static void draw_gui_desktop(void) {
     }
 }
 
-/* --- SNAKE COM ZERO FLICKER (DESENHO INCREMENTAL) --- */
+/* --- SNAKE COM RENDERIZACAO DELTA --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
@@ -454,6 +489,7 @@ static void spawn_snake_food(void) {
 }
 
 static void start_snake_game(void) {
+    mouse_under_saved = 0;
     os_mode = 4;
     snake_len = 4;
     snake_score = 0;
@@ -463,7 +499,6 @@ static void start_snake_game(void) {
 
     kgfx_clear(&os_fb, KGFX_BLACK);
 
-    // Moldura do Arcade desenhada uma única vez
     kgfx_draw_rounded_rect(&os_fb, SNAKE_ORIGIN_X - 10, SNAKE_ORIGIN_Y - 40,
                            SNAKE_GRID_W * SNAKE_CELL_SZ + 20, SNAKE_GRID_H * SNAKE_CELL_SZ + 50, 10, KGFX_CYAN, 0);
 
@@ -512,13 +547,11 @@ static void update_snake_game(void) {
         }
     }
 
-    // Apaga apenas o rabo que se moveu (Zero Flicker)
     snake_old_tail = snake_body[snake_len - 1];
     int ox = SNAKE_ORIGIN_X + snake_old_tail.x * SNAKE_CELL_SZ;
     int oy = SNAKE_ORIGIN_Y + snake_old_tail.y * SNAKE_CELL_SZ;
     kgfx_draw_rect(&os_fb, ox, oy, SNAKE_CELL_SZ, SNAKE_CELL_SZ, KGFX_BLACK, 1);
 
-    // Transforma a cabeça anterior em corpo verde
     int old_hx = SNAKE_ORIGIN_X + snake_body[0].x * SNAKE_CELL_SZ;
     int old_hy = SNAKE_ORIGIN_Y + snake_body[0].y * SNAKE_CELL_SZ;
     kgfx_draw_rounded_rect(&os_fb, old_hx + 1, old_hy + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, KGFX_GREEN, 1);
@@ -528,7 +561,6 @@ static void update_snake_game(void) {
     }
     snake_body[0] = new_head;
 
-    // Desenha nova cabeça amarela
     int nhx = SNAKE_ORIGIN_X + new_head.x * SNAKE_CELL_SZ;
     int nhy = SNAKE_ORIGIN_Y + new_head.y * SNAKE_CELL_SZ;
     kgfx_draw_rounded_rect(&os_fb, nhx + 1, nhy + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, KGFX_YELLOW, 1);
@@ -549,6 +581,7 @@ static void update_snake_game(void) {
 
 /* --- KEDIT & TOP --- */
 static void render_editor(void) {
+    mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_BLACK);
     kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 28, KGFX_BLUE, 1);
     char header_title[128];
@@ -576,6 +609,7 @@ static void render_editor(void) {
 }
 
 static void render_top(void) {
+    mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_BLACK);
     kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
 
@@ -599,6 +633,7 @@ static void render_top(void) {
 }
 
 static void render_bmp_view(void) {
+    mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_BLACK);
 
     kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 30, KGFX_BLUE, 1);
@@ -979,6 +1014,9 @@ static void execute_cli_command(const char *cmd) {
         kprintf("    • Free Memory  : %u KB\n", (unsigned int)(kmem_get_free_bytes() / 1024));
         kprintf("    • Used Memory  : %u bytes\n", (unsigned int)kmem_get_used_bytes());
     } else if (kstrcmp(cmd, "clear") == 0) {
+        kmemset(term_matrix, 0, sizeof(term_matrix));
+        term_col = 0;
+        term_row = 0;
         kgfx_clear(&os_fb, KGFX_BLACK);
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         kprintf("[Interactive Kernel CLI Terminal - Press ESC to Return to GUI]\n\n");
@@ -999,7 +1037,7 @@ void os_handle_keypress(char c) {
         if (c == '\b') {
             if (cli_pos > 0) {
                 cli_input[--cli_pos] = '\0';
-                kprintf("\b");
+                os_putchar('\b');
             }
         } else if (c == '\n') {
             execute_cli_command(cli_input);
@@ -1008,7 +1046,7 @@ void os_handle_keypress(char c) {
         } else if (c && cli_pos < sizeof(cli_input) - 1) {
             cli_input[cli_pos++] = c;
             cli_input[cli_pos] = '\0';
-            kprintf("%c", c);
+            os_putchar(c);
         }
     } else if (os_mode == 2) {
         if (c == '\b') {
@@ -1030,8 +1068,10 @@ void os_handle_keypress(char c) {
             render_editor();
         } else if (c == 17 || c == 27) { // Ctrl+Q ou ESC
             os_mode = 1;
+            mouse_under_saved = 0;
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+            render_term_matrix();
             kprintf("\n[Exited KEDIT - Returned to Shell]\n\n");
             print_prompt();
         } else if ((unsigned char)c >= 32 && edit_len < EDIT_BUF_SZ - 1) {
@@ -1042,8 +1082,10 @@ void os_handle_keypress(char c) {
     } else if (os_mode == 3) {
         if (c == 'q' || c == 'Q' || c == 27) {
             os_mode = 1;
+            mouse_under_saved = 0;
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+            render_term_matrix();
             kprintf("\n[Exited top - Returned to Shell]\n\n");
             print_prompt();
         }
@@ -1080,8 +1122,10 @@ void os_handle_keypress(char c) {
     } else if (os_mode == 6) {
         if (c == 27 || c == 'q' || c == 'Q') {
             os_mode = 1;
+            mouse_under_saved = 0;
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+            render_term_matrix();
             kprintf("\n[Exited BMP View - Returned to Shell]\n\n");
             print_prompt();
         }
@@ -1099,15 +1143,17 @@ void os_toggle_cli_mode(void) {
     os_mode = !os_mode;
     cli_pos = 0;
     cli_input[0] = '\0';
+    mouse_under_saved = 0;
 
     if (os_mode == 1) {
-        restore_mouse_under();
         kgfx_clear(&os_fb, KGFX_BLACK);
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
-        kprintf("\n[Interactive Kernel CLI Terminal Active - Type 'help' or press ESC to exit]\n\n");
-        print_prompt();
+        render_term_matrix();
+        if (term_row == 0 && term_col == 0) {
+            kprintf("\n[Interactive Kernel CLI Terminal Active - Type 'help' or press ESC to exit]\n\n");
+            print_prompt();
+        }
     } else {
-        mouse_under_saved = 0;
         draw_gui_desktop();
     }
 }
@@ -1126,6 +1172,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
 
     static uint8_t os_heap_pool[2 * 1024 * 1024];
     kmem_init(os_heap_pool, sizeof(os_heap_pool));
+
+    kmemset(term_matrix, 0, sizeof(term_matrix));
+    term_col = 0;
+    term_row = 0;
 
     kvfs_init();
     gdt_init();
@@ -1150,7 +1200,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
             update_snake_game();
         }
 
-        os_draw_mouse_cursor();
+        if (os_mode == 0 || os_mode == 5) {
+            os_draw_mouse_cursor();
+        }
+
         __asm__ __volatile__ ("hlt");
     }
 }
