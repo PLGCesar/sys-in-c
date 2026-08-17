@@ -14,21 +14,38 @@
 #include "../freestanding/kdiskfs.c"
 
 static kgfx_fb_t os_fb;
-static int os_mode = 0; /* 0 = GUI, 1 = CLI */
+
+/* 0 = GUI Desktop, 1 = CLI Shell, 2 = Text Editor (KEDIT), 3 = TOP */
+static int os_mode = 0;
 
 static char cli_input[128] = "";
 static size_t cli_pos = 0;
 static char current_dir[KVFS_MAX_PATH] = "/";
 
-/* Sistema de Usuários */
 static char current_user[32] = "root";
 static int is_root = 1;
 
+/* Editor KEDIT */
+#define EDIT_BUF_SZ 4096
+static char edit_buf[EDIT_BUF_SZ];
+static size_t edit_len = 0;
+static char edit_filepath[KVFS_MAX_PATH] = "";
+static char edit_status_msg[64] = "";
+
+/* Botão Clicável no Desktop e Notificação Toast (5s) */
+static kgfx_rect_t demo_btn = { .x = 30, .y = 250, .w = 270, .h = 36 };
+static int btn_pressed_prev = 0;
+static int toast_active = 0;
+static uint32_t toast_expire_tick = 0;
+
+/* Buffer de restauração do mouse */
 #define MOUSE_BUF_SZ 16
 static uint32_t mouse_under_buf[MOUSE_BUF_SZ * MOUSE_BUF_SZ];
 static int mouse_under_saved = 0;
 static int under_x = 0, under_y = 0, under_w = 0, under_h = 0;
 static int prev_mouse_x = 400, prev_mouse_y = 300;
+
+static void draw_gui_desktop(void);
 
 static void save_mouse_under(int x, int y, int w, int h) {
     under_x = x; under_y = y; under_w = w; under_h = h;
@@ -61,6 +78,20 @@ static void restore_mouse_under(void) {
 void os_draw_mouse_cursor(void) {
     if (os_mode != 0) return;
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
+
+    // Hit-Test: se estiver sobre o botão, vira Mãozinha clicável!
+    if (kgfx_rect_contains(&demo_btn, mouse->x, mouse->y)) {
+        mouse->type = KGFX_CURSOR_CLICKABLE;
+        if ((mouse->buttons & 1) && !btn_pressed_prev) {
+            toast_active = 1;
+            toast_expire_tick = pit_get_ticks() + 500; // 500 ticks = 5 segundos
+            draw_gui_desktop();
+        }
+    } else {
+        mouse->type = KGFX_CURSOR_NORMAL;
+    }
+    btn_pressed_prev = (mouse->buttons & 1);
+
     if (mouse->x == prev_mouse_x && mouse->y == prev_mouse_y && mouse_under_saved) return;
 
     restore_mouse_under();
@@ -109,25 +140,100 @@ static void draw_gui_desktop(void) {
 
     kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 10, KGFX_CYAN, 0);
     kgfx_draw_rect(&os_fb, 12, 12, os_fb.width - 24, 36, KGFX_BLUE, 1);
-    kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.6 (Persistent Disk & Multi-User)", KGFX_WHITE, KGFX_BLUE, 2);
+    kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.6", KGFX_WHITE, KGFX_BLUE, 2);
 
     kgfx_draw_rect_alpha(&os_fb, 20, 60, os_fb.width - 40, 45, kgfx_argb(180, 24, 24, 37));
-    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC], [F1] ou [TAB] para abrir o Terminal CLI!", KGFX_YELLOW, 0);
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] ou [TAB] para abrir o CLI! Use 'edit <arq>' para o editor!", KGFX_YELLOW, 0);
 
+    // Formas
     kgfx_draw_filled_circle(&os_fb, os_fb.width - 80, 180, 35, KGFX_PURPLE);
     kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, os_fb.width - 110, 150, os_fb.width - 70, 220, KGFX_GREEN, 1);
 
     const kata_drive_info_t *disk = kata_get_info();
-
     kgfx_draw_string(&os_fb, 30, 130, "[Kernel Core Subsystems Online]", KGFX_WHITE, 0);
-    kgfx_draw_string(&os_fb, 30, 150, "  * Persistent KSFS   : Root / with /bin, /etc, /dev, /home on ATA PIO", KGFX_CYAN, 0);
+    kgfx_draw_string(&os_fb, 30, 150, "  * Persistent KSFS   : Root / with /bin, /etc, /dev, /home on disk.img", KGFX_CYAN, 0);
     if (disk && disk->drive_present) {
         kgfx_draw_string(&os_fb, 30, 170, "  * ATA Storage Mode  : disk.img Mounted & Read/Write Ready", KGFX_GREEN, 0);
     } else {
         kgfx_draw_string(&os_fb, 30, 170, "  * ATA Storage Mode  : Standalone RAM Mode", KGFX_CYAN, 0);
     }
     kgfx_draw_string(&os_fb, 30, 190, "  * Multi-User Engine : User Authentication Active (whoami / su / adduser)", KGFX_CYAN, 0);
-    kgfx_draw_string(&os_fb, 30, 210, "  * Video System      : VBE 32-bit ARGB + Alpha Blending Active", KGFX_CYAN, 0);
+    kgfx_draw_string(&os_fb, 30, 210, "  * Hardware Timer    : PIT 100Hz Active (Uptime & Real-Time Events)", KGFX_CYAN, 0);
+
+    // Botão Clicável de Teste
+    kgfx_draw_rounded_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, 6, KGFX_PURPLE, 1);
+    kgfx_draw_string(&os_fb, demo_btn.x + 18, demo_btn.y + 11, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_PURPLE);
+
+    // Notificação Toast que dura 5 segundos
+    if (toast_active) {
+        kgfx_draw_rounded_rect(&os_fb, 30, 305, 540, 42, 8, kgfx_argb(230, 49, 50, 68), 1);
+        kgfx_draw_string(&os_fb, 45, 320, "[!] Clique detectado! O cursor virou maozinha (some em 5s).", KGFX_GREEN, 0);
+    }
+}
+
+/* --- RENDERIZADOR DO EDITOR DE TEXTO (KEDIT) --- */
+static void render_editor(void) {
+    kgfx_clear(&os_fb, KGFX_BLACK);
+
+    // Header Bar
+    kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 28, KGFX_BLUE, 1);
+    char header_title[128];
+    ksnprintf(header_title, sizeof(header_title), "KEDIT [Nano Bare-Metal] - %s", edit_filepath);
+    kgfx_draw_string(&os_fb, 15, 8, header_title, KGFX_WHITE, KGFX_BLUE);
+
+    // Linhas de Texto
+    int cur_x = 20, cur_y = 40;
+    int line_count = 1;
+
+    for (size_t i = 0; i < edit_len; i++) {
+        char c = edit_buf[i];
+        if (c == '\n') {
+            cur_x = 20;
+            cur_y += 14;
+            line_count++;
+            if (cur_y > (int)os_fb.height - 50) break;
+        } else {
+            kgfx_draw_char(&os_fb, cur_x, cur_y, c, KGFX_WHITE, 0);
+            cur_x += 8;
+            if (cur_x > (int)os_fb.width - 30) {
+                cur_x = 20;
+                cur_y += 14;
+            }
+        }
+    }
+
+    // Cursor piscante no editor
+    kgfx_draw_rect(&os_fb, cur_x, cur_y, 8, 12, KGFX_GREEN, 1);
+
+    // Footer Bar
+    kgfx_draw_rect(&os_fb, 0, os_fb.height - 30, os_fb.width, 30, KGFX_DARKGRAY, 1);
+    char footer_txt[128];
+    ksnprintf(footer_txt, sizeof(footer_txt), "^S Salvar no Disco | ESC/ ^Q Sair | Bytes: %u | %s", (unsigned int)edit_len, edit_status_msg);
+    kgfx_draw_string(&os_fb, 15, os_fb.height - 20, footer_txt, KGFX_YELLOW, KGFX_DARKGRAY);
+}
+
+/* --- RENDERIZADOR DO MONITOR DE PROCESSOS (TOP) --- */
+static void render_top(void) {
+    kgfx_clear(&os_fb, KGFX_BLACK);
+    kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+
+    uint32_t secs = pit_get_seconds();
+    uint32_t mins = secs / 60;
+    secs %= 60;
+
+    kprintf("[ test_os - Process Activity Monitor (top) ]\n");
+    kprintf("  Uptime: %02u:%02u | Tasks: 6 total, 1 running, 5 sleeping | KMEM Free: %u KB\n\n",
+            (unsigned int)mins, (unsigned int)secs, (unsigned int)(kmem_get_free_bytes() / 1024));
+
+    kprintf("  %-6s %-10s %-6s %-8s %-10s %-10s %s\n", "PID", "USER", "PR", "CPU%", "MEM(KB)", "STATE", "COMMAND");
+    kprintf("  ------------------------------------------------------------------\n");
+    kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 0, "root", 20, "0.0%", 64, "SLEEPING", "kernel_idle");
+    kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 1, "root", 20, "1.4%", 256, "RUNNING", "gui_desktop");
+    kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 2, "root", 20, "0.1%", 128, "SLEEPING", "ps2_input");
+    kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 3, "root", 20, "0.0%", 96, "SLEEPING", "pit_timer_100hz");
+    kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 4, "root", 20, "0.2%", 512, "SLEEPING", "vfs_ksfs_ata");
+    kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 5, current_user, 20, "0.6%", 180, "SLEEPING", "cli_shell");
+    kprintf("\n  [Pressione 'q' ou 'ESC' para sair do top]\n");
 }
 
 static void vfs_ls_callback(const char *name, size_t size, uint8_t type, uint16_t mode) {
@@ -183,18 +289,32 @@ static int verify_user_password(const char *user, const char *pass) {
         if (kstrcmp(user, "root") == 0 && kstrcmp(pass, "root") == 0) return 1;
         return 0;
     }
-
     const char *data = (const char *)passwd_file->data;
     char target_prefix[64];
     ksnprintf(target_prefix, sizeof(target_prefix), "%s:%s:", user, pass);
-
     if (kstrncmp(data, target_prefix, kstrlen(target_prefix)) == 0) return 1;
-
     char line_prefix[64];
     ksnprintf(line_prefix, sizeof(line_prefix), "\n%s:%s:", user, pass);
     if (kstrstr(data, line_prefix) != NULL) return 1;
-
     return 0;
+}
+
+static void open_editor_file(const char *path) {
+    resolve_path(path, edit_filepath, sizeof(edit_filepath));
+    edit_len = 0;
+    edit_buf[0] = '\0';
+    kstrncpy(edit_status_msg, "Modo Edicao", sizeof(edit_status_msg) - 1);
+
+    const kvfs_node_t *file = kvfs_open(edit_filepath);
+    if (file && file->data && file->size > 0) {
+        edit_len = file->size;
+        if (edit_len >= EDIT_BUF_SZ) edit_len = EDIT_BUF_SZ - 1;
+        kmemcpy(edit_buf, file->data, edit_len);
+        edit_buf[edit_len] = '\0';
+    }
+
+    os_mode = 2; // Ativa modo Editor
+    render_editor();
 }
 
 static void execute_cli_command(const char *cmd) {
@@ -207,22 +327,37 @@ static void execute_cli_command(const char *cmd) {
 
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
         kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema]\n");
+        kprintf("    • edit / nano <arq>  : Editor de texto visual de tela cheia\n");
+        kprintf("    • top                : Monitor interativo de processos\n");
+        kprintf("    • uptime             : Tempo de atividade do hardware\n");
         kprintf("    • ls [dir]           : Listar arquivos e pastas\n");
         kprintf("    • cd <dir>           : Navegar entre pastas\n");
         kprintf("    • pwd                : Exibir diretorio atual\n");
-        kprintf("    • cat <arquivo>      : Exibir conteudo de arquivo ou dispositivo\n");
-        kprintf("    • write <arq> <txt>  : Escrever texto e salvar no disco persistentemente\n");
-        kprintf("    • touch <arquivo>    : Criar arquivo vazio no disco\n");
+        kprintf("    • cat <arquivo>      : Exibir arquivo\n");
+        kprintf("    • write <arq> <txt>  : Escrever texto e gravar no disco\n");
+        kprintf("    • touch <arquivo>    : Criar arquivo vazio\n");
         kprintf("    • mkdir <pasta>      : Criar diretorio\n");
-        kprintf("    • rm <arquivo>       : Deletar arquivo do disco e da memoria\n");
+        kprintf("    • rm <arquivo>       : Deletar arquivo do disco\n");
         kprintf("    • whoami             : Exibir usuario atual\n");
-        kprintf("    • su <usuario> [pwd] : Alternar usuario (padrao root:root, user:1234)\n");
-        kprintf("    • adduser <usr> <pwd>: Criar novo usuario e gravar em /etc/passwd\n");
+        kprintf("    • su <usuario> [pwd] : Alternar usuario\n");
+        kprintf("    • adduser <usr> <pwd>: Criar novo usuario\n");
         kprintf("    • ata [info|0]       : Diagnostico do disco ATA PIO\n");
-        kprintf("    • format_disk        : Formatar disk.img com novo Superbloco KSFS\n");
+        kprintf("    • format_disk        : Formatar disk.img com KSFS\n");
         kprintf("    • mem                : Memoria heap KMEM\n");
         kprintf("    • clear              : Limpar tela\n");
         kprintf("    • exit               : Voltar ao modo GUI\n");
+    } else if (kstrncmp(cmd, "edit ", 5) == 0 || kstrncmp(cmd, "nano ", 5) == 0) {
+        const char *t = cmd + 5;
+        while (*t == ' ') t++;
+        if (*t) open_editor_file(t);
+        return;
+    } else if (kstrcmp(cmd, "top") == 0) {
+        os_mode = 3;
+        render_top();
+        return;
+    } else if (kstrcmp(cmd, "uptime") == 0) {
+        uint32_t secs = pit_get_seconds();
+        kprintf("  Uptime: %u segundos (%02u:%02u min)\n", (unsigned int)secs, (unsigned int)(secs / 60), (unsigned int)(secs % 60));
     } else if (kstrcmp(cmd, "whoami") == 0) {
         kprintf("  %s (UID: %d, %s)\n", current_user, is_root ? 0 : 1000, is_root ? "Superuser" : "Standard User");
     } else if (kstrncmp(cmd, "su", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
@@ -449,7 +584,7 @@ static void execute_cli_command(const char *cmd) {
 }
 
 void os_handle_keypress(char c) {
-    if (os_mode == 1) {
+    if (os_mode == 1) { // Modo CLI Shell
         if (c == '\b') {
             if (cli_pos > 0) {
                 cli_input[--cli_pos] = '\0';
@@ -464,10 +599,55 @@ void os_handle_keypress(char c) {
             cli_input[cli_pos] = '\0';
             kprintf("%c", c);
         }
+    } else if (os_mode == 2) { // Modo Editor de Texto (KEDIT)
+        if (c == '\b') {
+            if (edit_len > 0) {
+                edit_buf[--edit_len] = '\0';
+                render_editor();
+            }
+        } else if (c == '\n') {
+            if (edit_len < EDIT_BUF_SZ - 1) {
+                edit_buf[edit_len++] = '\n';
+                edit_buf[edit_len] = '\0';
+                render_editor();
+            }
+        } else if (c == 19) { // Ctrl+S: Salva no disco
+            kvfs_write(edit_filepath, edit_buf, edit_len);
+            kdiskfs_save_file(edit_filepath, edit_buf, edit_len, KVFS_TYPE_FILE, 0644);
+            kstrncpy(edit_status_msg, "[SALVO NO DISCO!]", sizeof(edit_status_msg) - 1);
+            render_editor();
+        } else if (c == 17) { // Ctrl+Q: Sair
+            os_mode = 1;
+            kgfx_clear(&os_fb, KGFX_BLACK);
+            kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+            kprintf("\n[Exited KEDIT - Returned to Shell]\n\n");
+            print_prompt();
+        } else if ((unsigned char)c >= 32 && edit_len < EDIT_BUF_SZ - 1) {
+            edit_buf[edit_len++] = c;
+            edit_buf[edit_len] = '\0';
+            render_editor();
+        }
+    } else if (os_mode == 3) { // Modo TOP
+        if (c == 'q' || c == 'Q') {
+            os_mode = 1;
+            kgfx_clear(&os_fb, KGFX_BLACK);
+            kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+            kprintf("\n[Exited top - Returned to Shell]\n\n");
+            print_prompt();
+        }
     }
 }
 
 void os_toggle_cli_mode(void) {
+    if (os_mode == 2 || os_mode == 3) {
+        os_mode = 1;
+        kgfx_clear(&os_fb, KGFX_BLACK);
+        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+        kprintf("\n[Returned to Shell]\n\n");
+        print_prompt();
+        return;
+    }
+
     os_mode = !os_mode;
     cli_pos = 0;
     cli_input[0] = '\0';
@@ -496,23 +676,25 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     kgfx_init(&os_fb, fb_ptr, width, height);
     kset_putchar(os_putchar);
 
-    // 1. Inicializa Heap KMEM primeiro
     static uint8_t os_heap_pool[2 * 1024 * 1024];
     kmem_init(os_heap_pool, sizeof(os_heap_pool));
 
-    // 2. Inicializa VFS e Hardware
     kvfs_init();
     gdt_init();
     idt_init();
     ps2_init();
     kata_init();
-
-    // 3. Monta o Sistema de Arquivos Persistente do Disco ATA
     kdiskfs_mount();
 
     draw_gui_desktop();
 
     while (1) {
+        // Expira notificação toast de 5 segundos se necessário
+        if (os_mode == 0 && toast_active && pit_get_ticks() >= toast_expire_tick) {
+            toast_active = 0;
+            draw_gui_desktop();
+        }
+
         os_draw_mouse_cursor();
         __asm__ __volatile__ ("hlt");
     }
