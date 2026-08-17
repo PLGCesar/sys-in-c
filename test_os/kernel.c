@@ -99,7 +99,6 @@ static const calc_btn_t calc_buttons[] = {
     {{CALC_WIN_X + 235, CALC_WIN_Y + 310, 70, 40}, "+",        KGFX_YELLOW}
 };
 
-/* 1. Raiz Quadrada com Bit Shift */
 static uint32_t sqrt_bitshift(uint32_t n) {
     if (n == 0) return 0;
     uint32_t res = 0;
@@ -117,7 +116,6 @@ static uint32_t sqrt_bitshift(uint32_t n) {
     return res;
 }
 
-/* 2. Raiz Quadrada pelo Método de Newton-Raphson */
 static double sqrt_newton_raphson(double s) {
     if (s <= 0.0) return 0.0;
     double x = s;
@@ -127,7 +125,6 @@ static double sqrt_newton_raphson(double s) {
     return x;
 }
 
-/* 3. Potência Inteira */
 static int64_t int_pow(int64_t base, int64_t exp) {
     if (exp < 0) return 0;
     int64_t res = 1;
@@ -151,13 +148,14 @@ static snake_pt_t snake_body[SNAKE_GRID_W * SNAKE_GRID_H];
 static int snake_len = 4;
 static int snake_dir_x = 1, snake_dir_y = 0;
 static snake_pt_t snake_food = {15, 10};
+static snake_pt_t snake_old_tail = {0, 0};
 static int snake_score = 0;
 static int snake_gameover = 0;
 static uint32_t snake_last_tick = 0;
 
 static void draw_gui_desktop(void);
 static void start_snake_game(void);
-static void render_calc_window(void);
+static void update_calc_display_only(void);
 
 static void save_mouse_under(int x, int y, int w, int h) {
     under_x = x; under_y = y; under_w = w; under_h = h;
@@ -205,6 +203,11 @@ static void draw_toast_notification(int show) {
     } else {
         kgfx_draw_rect(&os_fb, 25, 300, 550, 52, KGFX_DARKGRAY, 1);
     }
+}
+
+static void update_calc_display_only(void) {
+    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 40, CALC_WIN_W - 30, 40, 6, KGFX_BLACK, 1);
+    kgfx_draw_string_scaled(&os_fb, CALC_WIN_X + 25, CALC_WIN_Y + 48, calc_display, KGFX_GREEN, KGFX_BLACK, 2);
 }
 
 static void handle_calc_click(const char *label) {
@@ -256,7 +259,26 @@ static void handle_calc_click(const char *label) {
             }
         }
     }
-    render_calc_window();
+    update_calc_display_only();
+}
+
+static void render_calc_window(void) {
+    kgfx_clear(&os_fb, KGFX_DARKGRAY);
+
+    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X, CALC_WIN_Y, CALC_WIN_W, CALC_WIN_H, 10, KGFX_PURPLE, 1);
+    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, CALC_WIN_H - 8, 8, KGFX_NAVY, 1);
+
+    kgfx_draw_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, 28, KGFX_PURPLE, 1);
+    kgfx_draw_string(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 12, "Calculadora GUI (BitShift & Newton)", KGFX_WHITE, KGFX_PURPLE);
+    kgfx_draw_string(&os_fb, CALC_WIN_X + CALC_WIN_W - 35, CALC_WIN_Y + 12, "[ESC]", KGFX_YELLOW, KGFX_PURPLE);
+
+    update_calc_display_only();
+
+    for (size_t i = 0; i < sizeof(calc_buttons) / sizeof(calc_buttons[0]); i++) {
+        calc_btn_t b = calc_buttons[i];
+        kgfx_draw_rounded_rect(&os_fb, b.rect.x, b.rect.y, b.rect.w, b.rect.h, 5, b.color, 1);
+        kgfx_draw_string(&os_fb, b.rect.x + 15, b.rect.y + 14, b.label, KGFX_WHITE, b.color);
+    }
 }
 
 void os_draw_mouse_cursor(void) {
@@ -328,39 +350,24 @@ void os_draw_mouse_cursor(void) {
     prev_mouse_y = mouse->y;
 }
 
-static void render_calc_window(void) {
-    kgfx_clear(&os_fb, KGFX_DARKGRAY);
+/* --- ROLAGEM SUAVE DO TERMINAL (SCROLLING SEM LIMPAR) --- */
+static void terminal_scroll_up(void) {
+    int line_h = 14;
+    int start_y = 40;
+    int end_y = (int)os_fb.height - 50;
+    int scroll_w = (int)os_fb.width - 60;
 
-    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X, CALC_WIN_Y, CALC_WIN_W, CALC_WIN_H, 10, KGFX_PURPLE, 1);
-    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, CALC_WIN_H - 8, 8, KGFX_NAVY, 1);
-
-    kgfx_draw_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, 28, KGFX_PURPLE, 1);
-    kgfx_draw_string(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 12, "Calculadora GUI (BitShift & Newton)", KGFX_WHITE, KGFX_PURPLE);
-    kgfx_draw_string(&os_fb, CALC_WIN_X + CALC_WIN_W - 35, CALC_WIN_Y + 12, "[ESC]", KGFX_YELLOW, KGFX_PURPLE);
-
-    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 40, CALC_WIN_W - 30, 40, 6, KGFX_BLACK, 1);
-    kgfx_draw_string_scaled(&os_fb, CALC_WIN_X + 25, CALC_WIN_Y + 48, calc_display, KGFX_GREEN, KGFX_BLACK, 2);
-
-    for (size_t i = 0; i < sizeof(calc_buttons) / sizeof(calc_buttons[0]); i++) {
-        calc_btn_t b = calc_buttons[i];
-        kgfx_draw_rounded_rect(&os_fb, b.rect.x, b.rect.y, b.rect.w, b.rect.h, 5, b.color, 1);
-        kgfx_draw_string(&os_fb, b.rect.x + 15, b.rect.y + 14, b.label, KGFX_WHITE, b.color);
+    for (int y = start_y; y <= end_y - line_h; y++) {
+        size_t dst_offset = (size_t)y * os_fb.pitch + 30;
+        size_t src_offset = (size_t)(y + line_h) * os_fb.pitch + 30;
+        kmemcpy(&os_fb.buffer[dst_offset], &os_fb.buffer[src_offset], scroll_w * sizeof(uint32_t));
     }
-}
 
-static void render_bmp_view(void) {
-    kgfx_clear(&os_fb, KGFX_BLACK);
-
-    kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 30, KGFX_BLUE, 1);
-    char title[128];
-    ksnprintf(title, sizeof(title), "Visualizador BMP - %s  (Pressione ESC para fechar)", view_bmp_path);
-    kgfx_draw_string(&os_fb, 20, 10, title, KGFX_WHITE, KGFX_BLUE);
-
-    const kvfs_node_t *file = kvfs_open(view_bmp_path);
-    if (file && file->data && file->size > 0) {
-        kbmp_render(&os_fb, (os_fb.width - 128) / 2, (os_fb.height - 128) / 2, file->data, file->size);
-    } else {
-        kgfx_draw_string(&os_fb, 50, 100, "Erro: Arquivo BMP nao encontrado ou invalido!", KGFX_RED, 0);
+    // Limpa apenas a última linha rolada
+    for (int y = end_y - line_h + 1; y <= end_y; y++) {
+        for (int x = 30; x < 30 + scroll_w; x++) {
+            os_fb.buffer[y * os_fb.pitch + x] = KGFX_BLACK;
+        }
     }
 }
 
@@ -379,17 +386,16 @@ static void os_putchar(char c) {
     } else if ((unsigned char)c >= 32) {
         kgfx_draw_char(&os_fb, cursor_x, cursor_y, c, KGFX_WHITE, 0);
         cursor_x += 8;
-        if (cursor_x > (int)os_fb.width - 40) {
+        if (cursor_x > (int)os_fb.width - 50) {
             cursor_x = 30;
             cursor_y += 14;
         }
     }
 
-    if (cursor_y > (int)os_fb.height - 40) {
-        kgfx_clear(&os_fb, (os_mode == 1) ? KGFX_BLACK : KGFX_DARKGRAY);
-        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
-        cursor_y = 40;
-        cursor_x = 30;
+    // Rolagem real do terminal CLI ao passar da margem inferior
+    if (cursor_y > (int)os_fb.height - 50) {
+        terminal_scroll_up();
+        cursor_y -= 14;
     }
 }
 
@@ -434,10 +440,16 @@ static void draw_gui_desktop(void) {
     }
 }
 
+/* --- SNAKE COM RENDERIZACAO DELTA (ZERO FLICKER) --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
     snake_food.y = (int)((seed / 7) % (SNAKE_GRID_H - 2)) + 1;
+
+    // Desenha comida
+    int fx = SNAKE_ORIGIN_X + snake_food.x * SNAKE_CELL_SZ;
+    int fy = SNAKE_ORIGIN_Y + snake_food.y * SNAKE_CELL_SZ;
+    kgfx_draw_filled_circle(&os_fb, fx + 8, fy + 8, 6, KGFX_RED);
 }
 
 static void start_snake_game(void) {
@@ -448,47 +460,33 @@ static void start_snake_game(void) {
     snake_dir_x = 1;
     snake_dir_y = 0;
 
-    for (int i = 0; i < snake_len; i++) {
-        snake_body[i].x = 10 - i;
-        snake_body[i].y = 10;
-    }
-    spawn_snake_food();
-    snake_last_tick = pit_get_ticks();
-}
-
-static void render_snake_frame(void) {
     kgfx_clear(&os_fb, KGFX_BLACK);
 
+    // Moldura do Arcade
     kgfx_draw_rounded_rect(&os_fb, SNAKE_ORIGIN_X - 10, SNAKE_ORIGIN_Y - 40,
                            SNAKE_GRID_W * SNAKE_CELL_SZ + 20, SNAKE_GRID_H * SNAKE_CELL_SZ + 50, 10, KGFX_CYAN, 0);
 
     char score_txt[64];
-    ksnprintf(score_txt, sizeof(score_txt), "SNAKE RETRO - Pontos: %d  |  ESC: Sair", snake_score);
+    ksnprintf(score_txt, sizeof(score_txt), "SNAKE RETRO - Pontos: 0  |  ESC: Sair");
     kgfx_draw_string_scaled(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y - 30, score_txt, KGFX_YELLOW, 0, 1);
 
-    int fx = SNAKE_ORIGIN_X + snake_food.x * SNAKE_CELL_SZ;
-    int fy = SNAKE_ORIGIN_Y + snake_food.y * SNAKE_CELL_SZ;
-    kgfx_draw_filled_circle(&os_fb, fx + 8, fy + 8, 6, KGFX_RED);
-
     for (int i = 0; i < snake_len; i++) {
+        snake_body[i].x = 10 - i;
+        snake_body[i].y = 10;
         int bx = SNAKE_ORIGIN_X + snake_body[i].x * SNAKE_CELL_SZ;
         int by = SNAKE_ORIGIN_Y + snake_body[i].y * SNAKE_CELL_SZ;
-        uint32_t color = (i == 0) ? KGFX_YELLOW : KGFX_GREEN;
-        kgfx_draw_rounded_rect(&os_fb, bx + 1, by + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, color, 1);
+        kgfx_draw_rounded_rect(&os_fb, bx + 1, by + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, (i == 0) ? KGFX_YELLOW : KGFX_GREEN, 1);
     }
 
-    if (snake_gameover) {
-        kgfx_draw_rect_alpha(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y + 120, 400, 60, kgfx_argb(220, 20, 20, 20));
-        kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 60, SNAKE_ORIGIN_Y + 135, "GAME OVER! Pressione ESPACO para reiniciar", KGFX_RED, 0);
-        kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 110, SNAKE_ORIGIN_Y + 155, "ou [ESC] para voltar ao sistema", KGFX_WHITE, 0);
-    }
+    spawn_snake_food();
+    snake_last_tick = pit_get_ticks();
 }
 
 static void update_snake_game(void) {
     if (snake_gameover) return;
 
     uint32_t current_tick = pit_get_ticks();
-    if (current_tick - snake_last_tick < 10) return;
+    if (current_tick - snake_last_tick < 10) return; // 10 FPS
     snake_last_tick = current_tick;
 
     snake_pt_t new_head = { snake_body[0].x + snake_dir_x, snake_body[0].y + snake_dir_y };
@@ -496,6 +494,9 @@ static void update_snake_game(void) {
     if (new_head.x < 0 || new_head.x >= SNAKE_GRID_W || new_head.y < 0 || new_head.y >= SNAKE_GRID_H) {
         snake_gameover = 1;
         ksound_beep(150, 30, pit_get_ticks());
+        kgfx_draw_rect_alpha(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y + 120, 400, 60, kgfx_argb(220, 20, 20, 20));
+        kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 60, SNAKE_ORIGIN_Y + 135, "GAME OVER! Pressione ESPACO para reiniciar", KGFX_RED, 0);
+        kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 110, SNAKE_ORIGIN_Y + 155, "ou [ESC] para voltar ao sistema", KGFX_WHITE, 0);
         return;
     }
 
@@ -503,26 +504,52 @@ static void update_snake_game(void) {
         if (snake_body[i].x == new_head.x && snake_body[i].y == new_head.y) {
             snake_gameover = 1;
             ksound_beep(150, 30, pit_get_ticks());
+            kgfx_draw_rect_alpha(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y + 120, 400, 60, kgfx_argb(220, 20, 20, 20));
+            kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 60, SNAKE_ORIGIN_Y + 135, "GAME OVER! Pressione ESPACO para reiniciar", KGFX_RED, 0);
+            kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 110, SNAKE_ORIGIN_Y + 155, "ou [ESC] para voltar ao sistema", KGFX_WHITE, 0);
             return;
         }
     }
 
+    // Apaga apenas o rabo antigo
+    snake_old_tail = snake_body[snake_len - 1];
+    int ox = SNAKE_ORIGIN_X + snake_old_tail.x * SNAKE_CELL_SZ;
+    int oy = SNAKE_ORIGIN_Y + snake_old_tail.y * SNAKE_CELL_SZ;
+    kgfx_draw_rect(&os_fb, ox, oy, SNAKE_CELL_SZ, SNAKE_CELL_SZ, KGFX_BLACK, 1);
+
+    // Converte cabeça anterior em corpo verde
+    int old_hx = SNAKE_ORIGIN_X + snake_body[0].x * SNAKE_CELL_SZ;
+    int old_hy = SNAKE_ORIGIN_Y + snake_body[0].y * SNAKE_CELL_SZ;
+    kgfx_draw_rounded_rect(&os_fb, old_hx + 1, old_hy + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, KGFX_GREEN, 1);
+
+    // Move vetor da cobra
     for (int i = snake_len - 1; i > 0; i--) {
         snake_body[i] = snake_body[i - 1];
     }
     snake_body[0] = new_head;
 
+    // Desenha nova cabeça amarela
+    int nhx = SNAKE_ORIGIN_X + new_head.x * SNAKE_CELL_SZ;
+    int nhy = SNAKE_ORIGIN_Y + new_head.y * SNAKE_CELL_SZ;
+    kgfx_draw_rounded_rect(&os_fb, nhx + 1, nhy + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, KGFX_YELLOW, 1);
+
+    // Comeu comida
     if (new_head.x == snake_food.x && new_head.y == snake_food.y) {
         if (snake_len < SNAKE_GRID_W * SNAKE_GRID_H - 1) snake_len++;
         snake_score += 10;
         ksound_beep(1400, 5, pit_get_ticks());
+
+        // Atualiza placar
+        kgfx_draw_rect(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y - 35, 300, 20, KGFX_BLACK, 1);
+        char score_txt[64];
+        ksnprintf(score_txt, sizeof(score_txt), "SNAKE RETRO - Pontos: %d  |  ESC: Sair", snake_score);
+        kgfx_draw_string_scaled(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y - 30, score_txt, KGFX_YELLOW, 0, 1);
+
         spawn_snake_food();
     }
-
-    render_snake_frame();
 }
 
-/* --- KEDIT & TOP --- */
+/* --- KEDIT, TOP & BMP --- */
 static void render_editor(void) {
     kgfx_clear(&os_fb, KGFX_BLACK);
     kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 28, KGFX_BLUE, 1);
@@ -571,6 +598,22 @@ static void render_top(void) {
     kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 4, "root", 20, "0.2%", 512, "SLEEPING", "vfs_ksfs_ata");
     kprintf("  %-6d %-10s %-6d %-8s %-10d %-10s %s\n", 5, current_user, 20, "0.6%", 180, "SLEEPING", "cli_shell");
     kprintf("\n  [Pressione 'q' ou 'ESC' para sair do top]\n");
+}
+
+static void render_bmp_view(void) {
+    kgfx_clear(&os_fb, KGFX_BLACK);
+
+    kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 30, KGFX_BLUE, 1);
+    char title[128];
+    ksnprintf(title, sizeof(title), "Visualizador BMP - %s  (Pressione ESC para fechar)", view_bmp_path);
+    kgfx_draw_string(&os_fb, 20, 10, title, KGFX_WHITE, KGFX_BLUE);
+
+    const kvfs_node_t *file = kvfs_open(view_bmp_path);
+    if (file && file->data && file->size > 0) {
+        kbmp_render(&os_fb, (os_fb.width - 128) / 2, (os_fb.height - 128) / 2, file->data, file->size);
+    } else {
+        kgfx_draw_string(&os_fb, 50, 100, "Erro: Arquivo BMP nao encontrado ou invalido!", KGFX_RED, 0);
+    }
 }
 
 static void vfs_ls_callback(const char *name, size_t size, uint8_t type, uint16_t mode) {
@@ -1109,7 +1152,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
             update_snake_game();
         }
 
-        os_draw_mouse_cursor();
+        if (os_mode == 0 || os_mode == 5) {
+            os_draw_mouse_cursor();
+        }
+
         __asm__ __volatile__ ("hlt");
     }
 }

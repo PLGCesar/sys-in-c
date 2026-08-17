@@ -48,7 +48,7 @@ int kdiskfs_mount(void) {
 
     kmemcpy(&super_block, sector_buf, sizeof(super_block));
     if (super_block.magic != KDISKFS_MAGIC) {
-        // Se o disco for virgem, formata automaticamente com o superbloco
+        // Formata apenas na primeira vez que o disco virgem for inserido
         return kdiskfs_format();
     }
 
@@ -57,15 +57,22 @@ int kdiskfs_mount(void) {
         kmemcpy(((uint8_t *)disk_entries) + (i * ATA_SECTOR_SIZE), sector_buf, ATA_SECTOR_SIZE);
     }
 
-    // Carrega todos os arquivos persistidos do disco para o VFS em memória
+    // Carrega todos os arquivos persistidos do disco para o VFS
     for (int i = 0; i < KDISKFS_MAX_FILES; i++) {
-        if (disk_entries[i].is_used && disk_entries[i].size > 0) {
-            uint8_t *file_data = kmalloc(disk_entries[i].sector_count * ATA_SECTOR_SIZE);
-            if (file_data) {
-                for (uint32_t s = 0; s < disk_entries[i].sector_count; s++) {
-                    kata_read_sector(disk_entries[i].start_lba + s, file_data + (s * ATA_SECTOR_SIZE));
+        if (disk_entries[i].is_used) {
+            if (disk_entries[i].type == KVFS_TYPE_DIR) {
+                kvfs_mkdir(disk_entries[i].path);
+            } else if (disk_entries[i].size > 0) {
+                uint8_t *file_data = kmalloc(disk_entries[i].sector_count * ATA_SECTOR_SIZE + 1);
+                if (file_data) {
+                    for (uint32_t s = 0; s < disk_entries[i].sector_count; s++) {
+                        kata_read_sector(disk_entries[i].start_lba + s, file_data + (s * ATA_SECTOR_SIZE));
+                    }
+                    file_data[disk_entries[i].size] = '\0';
+                    kvfs_write(disk_entries[i].path, file_data, disk_entries[i].size);
                 }
-                kvfs_create(disk_entries[i].path, file_data, disk_entries[i].size, disk_entries[i].type, disk_entries[i].mode);
+            } else {
+                kvfs_create(disk_entries[i].path, "", 0, disk_entries[i].type, disk_entries[i].mode);
             }
         }
     }
@@ -122,9 +129,9 @@ int kdiskfs_save_file(const char *path, const void *data, size_t size, uint8_t t
 
     for (uint32_t s = 0; s < sectors_needed; s++) {
         kmemset(sector_buf, 0, sizeof(sector_buf));
-        size_t bytes_to_copy = size - (s * ATA_SECTOR_SIZE);
+        size_t bytes_to_copy = (size > s * ATA_SECTOR_SIZE) ? (size - (s * ATA_SECTOR_SIZE)) : 0;
         if (bytes_to_copy > ATA_SECTOR_SIZE) bytes_to_copy = ATA_SECTOR_SIZE;
-        if (src) kmemcpy(sector_buf, src + (s * ATA_SECTOR_SIZE), bytes_to_copy);
+        if (src && bytes_to_copy > 0) kmemcpy(sector_buf, src + (s * ATA_SECTOR_SIZE), bytes_to_copy);
 
         kata_write_sector(start_lba + s, sector_buf);
     }
