@@ -12,10 +12,12 @@
 #include "../freestanding/kata.c"
 #include "../freestanding/kdiskfs.h"
 #include "../freestanding/kdiskfs.c"
+#include "../freestanding/ksound.h"
+#include "../freestanding/ksound.c"
 
 static kgfx_fb_t os_fb;
 
-/* 0 = GUI Desktop, 1 = CLI Shell, 2 = Text Editor (KEDIT), 3 = TOP */
+/* 0 = GUI, 1 = CLI, 2 = KEDIT, 3 = TOP, 4 = SNAKE GAME */
 static int os_mode = 0;
 
 static char cli_input[128] = "";
@@ -32,20 +34,60 @@ static size_t edit_len = 0;
 static char edit_filepath[KVFS_MAX_PATH] = "";
 static char edit_status_msg[64] = "";
 
-/* Botão Clicável no Desktop e Notificação Toast (5s) */
-static kgfx_rect_t demo_btn = { .x = 30, .y = 250, .w = 270, .h = 36 };
+/* Botões Interativos no Desktop */
+static kgfx_rect_t demo_btn = { .x = 30,  .y = 250, .w = 260, .h = 36 };
+static kgfx_rect_t game_btn = { .x = 310, .y = 250, .w = 240, .h = 36 };
+
+static int btn_pressed_state = 0;
 static int btn_pressed_prev = 0;
 static int toast_active = 0;
 static uint32_t toast_expire_tick = 0;
 
-/* Buffer de restauração do mouse */
+/* Buffer de restauração do mouse (16x16) */
 #define MOUSE_BUF_SZ 16
 static uint32_t mouse_under_buf[MOUSE_BUF_SZ * MOUSE_BUF_SZ];
 static int mouse_under_saved = 0;
 static int under_x = 0, under_y = 0, under_w = 0, under_h = 0;
 static int prev_mouse_x = 400, prev_mouse_y = 300;
 
+/* --- JOGO SNAKE (COBRINHA) --- */
+#define SNAKE_GRID_W 28
+#define SNAKE_GRID_H 20
+#define SNAKE_CELL_SZ 16
+#define SNAKE_ORIGIN_X 176
+#define SNAKE_ORIGIN_Y 130
+
+typedef struct { int x, y; } snake_pt_t;
+static snake_pt_t snake_body[SNAKE_GRID_W * SNAKE_GRID_H];
+static int snake_len = 4;
+static int snake_dir_x = 1, snake_dir_y = 0;
+static snake_pt_t snake_food = {15, 10};
+static int snake_score = 0;
+static int snake_gameover = 0;
+static uint32_t snake_last_tick = 0;
+
 static void draw_gui_desktop(void);
+static void start_snake_game(void);
+
+static void draw_demo_button(int pressed) {
+    if (pressed) {
+        kgfx_draw_rounded_rect(&os_fb, demo_btn.x + 2, demo_btn.y + 2, demo_btn.w - 4, demo_btn.h - 4, 6, KGFX_BLUE, 1);
+        kgfx_draw_string(&os_fb, demo_btn.x + 20, demo_btn.y + 12, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_BLUE);
+    } else {
+        kgfx_draw_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, KGFX_DARKGRAY, 1);
+        kgfx_draw_rounded_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, 6, KGFX_PURPLE, 1);
+        kgfx_draw_string(&os_fb, demo_btn.x + 18, demo_btn.y + 11, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_PURPLE);
+    }
+}
+
+static void draw_toast_notification(int show) {
+    if (show) {
+        kgfx_draw_rounded_rect(&os_fb, 30, 305, 540, 42, 8, kgfx_argb(230, 49, 50, 68), 1);
+        kgfx_draw_string(&os_fb, 45, 320, "[!] Clique detectado com som! Mensagem sumira em 5s.", KGFX_GREEN, 0);
+    } else {
+        kgfx_draw_rect(&os_fb, 25, 300, 550, 52, KGFX_DARKGRAY, 1);
+    }
+}
 
 static void save_mouse_under(int x, int y, int w, int h) {
     under_x = x; under_y = y; under_w = w; under_h = h;
@@ -79,17 +121,40 @@ void os_draw_mouse_cursor(void) {
     if (os_mode != 0) return;
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
 
-    // Hit-Test: se estiver sobre o botão, vira Mãozinha clicável!
-    if (kgfx_rect_contains(&demo_btn, mouse->x, mouse->y)) {
+    int over_btn = kgfx_rect_contains(&demo_btn, mouse->x, mouse->y);
+    int over_game = kgfx_rect_contains(&game_btn, mouse->x, mouse->y);
+
+    if (over_btn || over_game) {
         mouse->type = KGFX_CURSOR_CLICKABLE;
-        if ((mouse->buttons & 1) && !btn_pressed_prev) {
-            toast_active = 1;
-            toast_expire_tick = pit_get_ticks() + 500; // 500 ticks = 5 segundos
-            draw_gui_desktop();
-        }
     } else {
         mouse->type = KGFX_CURSOR_NORMAL;
     }
+
+    // Clique e Animação no Botão Demo
+    if (over_btn) {
+        if ((mouse->buttons & 1) && !btn_pressed_prev) {
+            btn_pressed_state = 1;
+            draw_demo_button(1);
+            ksound_beep(880, 4, pit_get_ticks()); // Som de clique
+            toast_active = 1;
+            toast_expire_tick = pit_get_ticks() + 500;
+            draw_toast_notification(1);
+        } else if (!(mouse->buttons & 1) && btn_pressed_state) {
+            btn_pressed_state = 0;
+            draw_demo_button(0);
+        }
+    } else if (btn_pressed_state) {
+        btn_pressed_state = 0;
+        draw_demo_button(0);
+    }
+
+    // Clique no Botão do Jogo Snake
+    if (over_game && (mouse->buttons & 1) && !btn_pressed_prev) {
+        ksound_beep(1200, 6, pit_get_ticks());
+        start_snake_game();
+        return;
+    }
+
     btn_pressed_prev = (mouse->buttons & 1);
 
     if (mouse->x == prev_mouse_x && mouse->y == prev_mouse_y && mouse_under_saved) return;
@@ -143,9 +208,8 @@ static void draw_gui_desktop(void) {
     kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.6", KGFX_WHITE, KGFX_BLUE, 2);
 
     kgfx_draw_rect_alpha(&os_fb, 20, 60, os_fb.width - 40, 45, kgfx_argb(180, 24, 24, 37));
-    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] ou [TAB] para abrir o CLI! Use 'edit <arq>' para o editor!", KGFX_YELLOW, 0);
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] para o Terminal CLI! Use 'snake' ou clique no botao para o jogo!", KGFX_YELLOW, 0);
 
-    // Formas
     kgfx_draw_filled_circle(&os_fb, os_fb.width - 80, 180, 35, KGFX_PURPLE);
     kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, os_fb.width - 110, 150, os_fb.width - 70, 220, KGFX_GREEN, 1);
 
@@ -158,61 +222,145 @@ static void draw_gui_desktop(void) {
         kgfx_draw_string(&os_fb, 30, 170, "  * ATA Storage Mode  : Standalone RAM Mode", KGFX_CYAN, 0);
     }
     kgfx_draw_string(&os_fb, 30, 190, "  * Multi-User Engine : User Authentication Active (whoami / su / adduser)", KGFX_CYAN, 0);
-    kgfx_draw_string(&os_fb, 30, 210, "  * Hardware Timer    : PIT 100Hz Active (Uptime & Real-Time Events)", KGFX_CYAN, 0);
+    kgfx_draw_string(&os_fb, 30, 210, "  * Sound & Timer     : PC Speaker Audio (0x61) + PIT 100Hz Active", KGFX_CYAN, 0);
 
-    // Botão Clicável de Teste
-    kgfx_draw_rounded_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, 6, KGFX_PURPLE, 1);
-    kgfx_draw_string(&os_fb, demo_btn.x + 18, demo_btn.y + 11, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_PURPLE);
+    // Botão Demo
+    draw_demo_button(0);
 
-    // Notificação Toast que dura 5 segundos
+    // Botão do Jogo Snake
+    kgfx_draw_rounded_rect(&os_fb, game_btn.x, game_btn.y, game_btn.w, game_btn.h, 6, KGFX_GREEN, 1);
+    kgfx_draw_string(&os_fb, game_btn.x + 18, game_btn.y + 11, "[*] Jogar Snake (Cobrinha)", KGFX_WHITE, KGFX_GREEN);
+
     if (toast_active) {
-        kgfx_draw_rounded_rect(&os_fb, 30, 305, 540, 42, 8, kgfx_argb(230, 49, 50, 68), 1);
-        kgfx_draw_string(&os_fb, 45, 320, "[!] Clique detectado! O cursor virou maozinha (some em 5s).", KGFX_GREEN, 0);
+        draw_toast_notification(1);
     }
 }
 
-/* --- RENDERIZADOR DO EDITOR DE TEXTO (KEDIT) --- */
-static void render_editor(void) {
+/* --- LOGICA DO JOGO SNAKE --- */
+static void spawn_snake_food(void) {
+    uint32_t seed = pit_get_ticks();
+    snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
+    snake_food.y = (int)((seed / 7) % (SNAKE_GRID_H - 2)) + 1;
+}
+
+static void start_snake_game(void) {
+    os_mode = 4; // Modo Snake
+    snake_len = 4;
+    snake_score = 0;
+    snake_gameover = 0;
+    snake_dir_x = 1;
+    snake_dir_y = 0;
+
+    for (int i = 0; i < snake_len; i++) {
+        snake_body[i].x = 10 - i;
+        snake_body[i].y = 10;
+    }
+    spawn_snake_food();
+    snake_last_tick = pit_get_ticks();
+}
+
+static void render_snake_frame(void) {
     kgfx_clear(&os_fb, KGFX_BLACK);
 
-    // Header Bar
+    // Borda do Arcade
+    kgfx_draw_rounded_rect(&os_fb, SNAKE_ORIGIN_X - 10, SNAKE_ORIGIN_Y - 40,
+                           SNAKE_GRID_W * SNAKE_CELL_SZ + 20, SNAKE_GRID_H * SNAKE_CELL_SZ + 50, 10, KGFX_CYAN, 0);
+
+    // Placar
+    char score_txt[64];
+    ksnprintf(score_txt, sizeof(score_txt), "SNAKE RETRO - Pontos: %d  |  ESC: Sair", snake_score);
+    kgfx_draw_string_scaled(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y - 30, score_txt, KGFX_YELLOW, 0, 1);
+
+    // Maçã
+    int fx = SNAKE_ORIGIN_X + snake_food.x * SNAKE_CELL_SZ;
+    int fy = SNAKE_ORIGIN_Y + snake_food.y * SNAKE_CELL_SZ;
+    kgfx_draw_filled_circle(&os_fb, fx + 8, fy + 8, 6, KGFX_RED);
+
+    // Corpo da Cobrinha
+    for (int i = 0; i < snake_len; i++) {
+        int bx = SNAKE_ORIGIN_X + snake_body[i].x * SNAKE_CELL_SZ;
+        int by = SNAKE_ORIGIN_Y + snake_body[i].y * SNAKE_CELL_SZ;
+        uint32_t color = (i == 0) ? KGFX_YELLOW : KGFX_GREEN;
+        kgfx_draw_rounded_rect(&os_fb, bx + 1, by + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, color, 1);
+    }
+
+    if (snake_gameover) {
+        kgfx_draw_rect_alpha(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y + 120, 400, 60, kgfx_argb(220, 20, 20, 20));
+        kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 60, SNAKE_ORIGIN_Y + 135, "GAME OVER! Pressione ESPACO para reiniciar", KGFX_RED, 0);
+        kgfx_draw_string(&os_fb, SNAKE_ORIGIN_X + 110, SNAKE_ORIGIN_Y + 155, "ou [ESC] para voltar ao sistema", KGFX_WHITE, 0);
+    }
+}
+
+static void update_snake_game(void) {
+    if (snake_gameover) return;
+
+    uint32_t current_tick = pit_get_ticks();
+    if (current_tick - snake_last_tick < 10) return; // 10 FPS
+    snake_last_tick = current_tick;
+
+    snake_pt_t new_head = { snake_body[0].x + snake_dir_x, snake_body[0].y + snake_dir_y };
+
+    // Colisão com parede
+    if (new_head.x < 0 || new_head.x >= SNAKE_GRID_W || new_head.y < 0 || new_head.y >= SNAKE_GRID_H) {
+        snake_gameover = 1;
+        ksound_beep(150, 30, pit_get_ticks()); // Som de Game Over
+        return;
+    }
+
+    // Colisão com próprio corpo
+    for (int i = 0; i < snake_len; i++) {
+        if (snake_body[i].x == new_head.x && snake_body[i].y == new_head.y) {
+            snake_gameover = 1;
+            ksound_beep(150, 30, pit_get_ticks());
+            return;
+        }
+    }
+
+    // Move o corpo
+    for (int i = snake_len - 1; i > 0; i--) {
+        snake_body[i] = snake_body[i - 1];
+    }
+    snake_body[0] = new_head;
+
+    // Comeu a comida
+    if (new_head.x == snake_food.x && new_head.y == snake_food.y) {
+        if (snake_len < SNAKE_GRID_W * SNAKE_GRID_H - 1) snake_len++;
+        snake_score += 10;
+        ksound_beep(1400, 5, pit_get_ticks()); // Som de comida
+        spawn_snake_food();
+    }
+
+    render_snake_frame();
+}
+
+/* --- KEDIT & TOP --- */
+static void render_editor(void) {
+    kgfx_clear(&os_fb, KGFX_BLACK);
     kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 28, KGFX_BLUE, 1);
     char header_title[128];
-    ksnprintf(header_title, sizeof(header_title), "KEDIT [Nano Bare-Metal] - %s", edit_filepath);
+    ksnprintf(header_title, sizeof(header_title), "KEDIT - %s", edit_filepath);
     kgfx_draw_string(&os_fb, 15, 8, header_title, KGFX_WHITE, KGFX_BLUE);
 
-    // Linhas de Texto
     int cur_x = 20, cur_y = 40;
-    int line_count = 1;
-
     for (size_t i = 0; i < edit_len; i++) {
         char c = edit_buf[i];
         if (c == '\n') {
-            cur_x = 20;
-            cur_y += 14;
-            line_count++;
+            cur_x = 20; cur_y += 14;
             if (cur_y > (int)os_fb.height - 50) break;
         } else {
             kgfx_draw_char(&os_fb, cur_x, cur_y, c, KGFX_WHITE, 0);
             cur_x += 8;
-            if (cur_x > (int)os_fb.width - 30) {
-                cur_x = 20;
-                cur_y += 14;
-            }
+            if (cur_x > (int)os_fb.width - 30) { cur_x = 20; cur_y += 14; }
         }
     }
-
-    // Cursor piscante no editor
     kgfx_draw_rect(&os_fb, cur_x, cur_y, 8, 12, KGFX_GREEN, 1);
 
-    // Footer Bar
     kgfx_draw_rect(&os_fb, 0, os_fb.height - 30, os_fb.width, 30, KGFX_DARKGRAY, 1);
     char footer_txt[128];
-    ksnprintf(footer_txt, sizeof(footer_txt), "^S Salvar no Disco | ESC/ ^Q Sair | Bytes: %u | %s", (unsigned int)edit_len, edit_status_msg);
+    ksnprintf(footer_txt, sizeof(footer_txt), "^S Salvar | ESC/ ^Q Sair | Bytes: %u | %s", (unsigned int)edit_len, edit_status_msg);
     kgfx_draw_string(&os_fb, 15, os_fb.height - 20, footer_txt, KGFX_YELLOW, KGFX_DARKGRAY);
 }
 
-/* --- RENDERIZADOR DO MONITOR DE PROCESSOS (TOP) --- */
 static void render_top(void) {
     kgfx_clear(&os_fb, KGFX_BLACK);
     kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
@@ -313,7 +461,7 @@ static void open_editor_file(const char *path) {
         edit_buf[edit_len] = '\0';
     }
 
-    os_mode = 2; // Ativa modo Editor
+    os_mode = 2;
     render_editor();
 }
 
@@ -327,17 +475,19 @@ static void execute_cli_command(const char *cmd) {
 
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
         kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema]\n");
-        kprintf("    • edit / nano <arq>  : Editor de texto visual de tela cheia\n");
-        kprintf("    • top                : Monitor interativo de processos\n");
+        kprintf("    • snake / game       : Jogo retro Snake (Cobrinha)\n");
+        kprintf("    • beep [freq] [ms]   : Emitir som no PC Speaker\n");
+        kprintf("    • edit / nano <arq>  : Editor de texto visual\n");
+        kprintf("    • top                : Monitor de processos em tempo real\n");
         kprintf("    • uptime             : Tempo de atividade do hardware\n");
         kprintf("    • ls [dir]           : Listar arquivos e pastas\n");
         kprintf("    • cd <dir>           : Navegar entre pastas\n");
         kprintf("    • pwd                : Exibir diretorio atual\n");
         kprintf("    • cat <arquivo>      : Exibir arquivo\n");
-        kprintf("    • write <arq> <txt>  : Escrever texto e gravar no disco\n");
+        kprintf("    • write <arq> <txt>  : Gravar no disco persistente\n");
         kprintf("    • touch <arquivo>    : Criar arquivo vazio\n");
         kprintf("    • mkdir <pasta>      : Criar diretorio\n");
-        kprintf("    • rm <arquivo>       : Deletar arquivo do disco\n");
+        kprintf("    • rm <arquivo>       : Deletar arquivo\n");
         kprintf("    • whoami             : Exibir usuario atual\n");
         kprintf("    • su <usuario> [pwd] : Alternar usuario\n");
         kprintf("    • adduser <usr> <pwd>: Criar novo usuario\n");
@@ -346,6 +496,22 @@ static void execute_cli_command(const char *cmd) {
         kprintf("    • mem                : Memoria heap KMEM\n");
         kprintf("    • clear              : Limpar tela\n");
         kprintf("    • exit               : Voltar ao modo GUI\n");
+    } else if (kstrcmp(cmd, "snake") == 0 || kstrcmp(cmd, "game") == 0) {
+        start_snake_game();
+        return;
+    } else if (kstrncmp(cmd, "beep", 4) == 0) {
+        const char *arg = cmd + 4;
+        while (*arg == ' ') arg++;
+        uint32_t freq = 880;
+        uint32_t ms = 15;
+        if (*arg) {
+            freq = (uint32_t)katoi(arg);
+            const char *sp = kstrchr(arg, ' ');
+            if (sp) ms = (uint32_t)katoi(sp + 1);
+        }
+        if (freq == 0) freq = 880;
+        ksound_beep(freq, ms, pit_get_ticks());
+        kprintf("  Beep: %u Hz (%u ticks)\n", (unsigned int)freq, (unsigned int)ms);
     } else if (kstrncmp(cmd, "edit ", 5) == 0 || kstrncmp(cmd, "nano ", 5) == 0) {
         const char *t = cmd + 5;
         while (*t == ' ') t++;
@@ -426,7 +592,7 @@ static void execute_cli_command(const char *cmd) {
                 kvfs_mkdir(home_dir);
                 kdiskfs_save_file(home_dir, NULL, 0, KVFS_TYPE_DIR, 0755);
 
-                kprintf("  User '%s' created successfully and saved to disk (/etc/passwd & %s)\n", new_user, home_dir);
+                kprintf("  User '%s' created and saved to disk (/etc/passwd & %s)\n", new_user, home_dir);
             }
         }
     } else if (kstrncmp(cmd, "write ", 6) == 0) {
@@ -479,7 +645,7 @@ static void execute_cli_command(const char *cmd) {
 
         kvfs_delete(resolved);
         kdiskfs_delete_file(resolved);
-        kprintf("  [✔] File '%s' deleted from disk & memory\n", resolved);
+        kprintf("  [✔] File '%s' deleted from disk\n", resolved);
     } else if (kstrcmp(cmd, "format_disk") == 0) {
         if (!is_root) {
             kprintf("  format_disk: Permission denied (must be root)\n");
@@ -584,7 +750,7 @@ static void execute_cli_command(const char *cmd) {
 }
 
 void os_handle_keypress(char c) {
-    if (os_mode == 1) { // Modo CLI Shell
+    if (os_mode == 1) {
         if (c == '\b') {
             if (cli_pos > 0) {
                 cli_input[--cli_pos] = '\0';
@@ -599,7 +765,7 @@ void os_handle_keypress(char c) {
             cli_input[cli_pos] = '\0';
             kprintf("%c", c);
         }
-    } else if (os_mode == 2) { // Modo Editor de Texto (KEDIT)
+    } else if (os_mode == 2) {
         if (c == '\b') {
             if (edit_len > 0) {
                 edit_buf[--edit_len] = '\0';
@@ -611,12 +777,13 @@ void os_handle_keypress(char c) {
                 edit_buf[edit_len] = '\0';
                 render_editor();
             }
-        } else if (c == 19) { // Ctrl+S: Salva no disco
+        } else if (c == 19) { // Ctrl+S
             kvfs_write(edit_filepath, edit_buf, edit_len);
             kdiskfs_save_file(edit_filepath, edit_buf, edit_len, KVFS_TYPE_FILE, 0644);
             kstrncpy(edit_status_msg, "[SALVO NO DISCO!]", sizeof(edit_status_msg) - 1);
+            ksound_beep(1200, 6, pit_get_ticks());
             render_editor();
-        } else if (c == 17) { // Ctrl+Q: Sair
+        } else if (c == 17 || c == 27) { // Ctrl+Q ou ESC
             os_mode = 1;
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
@@ -627,24 +794,38 @@ void os_handle_keypress(char c) {
             edit_buf[edit_len] = '\0';
             render_editor();
         }
-    } else if (os_mode == 3) { // Modo TOP
-        if (c == 'q' || c == 'Q') {
+    } else if (os_mode == 3) {
+        if (c == 'q' || c == 'Q' || c == 27) {
             os_mode = 1;
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
             kprintf("\n[Exited top - Returned to Shell]\n\n");
             print_prompt();
         }
+    } else if (os_mode == 4) { // Jogo Snake
+        if (c == 'w' || c == 'W') {
+            if (snake_dir_y == 0) { snake_dir_x = 0; snake_dir_y = -1; }
+        } else if (c == 's' || c == 'S') {
+            if (snake_dir_y == 0) { snake_dir_x = 0; snake_dir_y = 1; }
+        } else if (c == 'a' || c == 'A') {
+            if (snake_dir_x == 0) { snake_dir_x = -1; snake_dir_y = 0; }
+        } else if (c == 'd' || c == 'D') {
+            if (snake_dir_x == 0) { snake_dir_x = 1; snake_dir_y = 0; }
+        } else if (c == ' ') {
+            if (snake_gameover) start_snake_game();
+        } else if (c == 27 || c == 'q' || c == 'Q') {
+            os_mode = 0;
+            mouse_under_saved = 0;
+            draw_gui_desktop();
+        }
     }
 }
 
 void os_toggle_cli_mode(void) {
-    if (os_mode == 2 || os_mode == 3) {
-        os_mode = 1;
-        kgfx_clear(&os_fb, KGFX_BLACK);
-        kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
-        kprintf("\n[Returned to Shell]\n\n");
-        print_prompt();
+    if (os_mode == 2 || os_mode == 3 || os_mode == 4) {
+        os_mode = 0;
+        mouse_under_saved = 0;
+        draw_gui_desktop();
         return;
     }
 
@@ -685,14 +866,23 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     ps2_init();
     kata_init();
     kdiskfs_mount();
+    ksound_init();
 
     draw_gui_desktop();
 
     while (1) {
-        // Expira notificação toast de 5 segundos se necessário
-        if (os_mode == 0 && toast_active && pit_get_ticks() >= toast_expire_tick) {
+        uint32_t cur_ticks = pit_get_ticks();
+        ksound_update(cur_ticks);
+
+        // Desativa notificação após 5 segundos sem piscar a tela
+        if (os_mode == 0 && toast_active && cur_ticks >= toast_expire_tick) {
             toast_active = 0;
-            draw_gui_desktop();
+            draw_toast_notification(0);
+        }
+
+        // Loop do Snake
+        if (os_mode == 4) {
+            update_snake_game();
         }
 
         os_draw_mouse_cursor();

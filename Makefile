@@ -83,8 +83,8 @@ snc: src/snc/snc.c $(LIB_IPC)
 jsonview: src/jsonview/jsonview.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/jsonview/jsonview.c -o jsonview $(LDFLAGS_IPC)
 
-free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/main_test.c freestanding/kcalc.c
-	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/main_test.c -o freestanding_test
+free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/main_test.c freestanding/kcalc.c
+	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/main_test.c -o freestanding_test
 	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kcalc.c -o kcalc
 
 install: all
