@@ -198,8 +198,12 @@ void kgfx_draw_rect(kgfx_fb_t *fb, int x, int y, int w, int h, uint32_t color, i
     if (w <= 0 || h <= 0) return;
     if (fill) {
         for (int py = y; py < y + h; py++) {
-            for (int px = x; px < x + w; px++) {
-                kgfx_draw_pixel(fb, px, py, color);
+            if (py < 0 || (uint32_t)py >= fb->height) continue;
+            uint32_t *row = &fb->buffer[py * fb->pitch + x];
+            for (int px = 0; px < w; px++) {
+                if (x + px >= 0 && (uint32_t)(x + px) < fb->width) {
+                    row[px] = color;
+                }
             }
         }
     } else {
@@ -289,13 +293,36 @@ void kgfx_draw_triangle(kgfx_fb_t *fb, int x0, int y0, int x1, int y1, int x2, i
     }
 }
 
+/* Renderização direta acelerada de fontes */
 void kgfx_draw_char(kgfx_fb_t *fb, int x, int y, char c, uint32_t fg, uint32_t bg) {
-    kgfx_draw_char_scaled(fb, x, y, c, fg, bg, 1);
+    if (c < 32 || c > 126) c = '?';
+    const uint8_t *glyph = kgfx_font8x8[c - 32];
+    size_t pitch = fb->pitch;
+
+    for (int row = 0; row < 8; row++) {
+        int py = y + row;
+        if (py < 0 || (uint32_t)py >= fb->height) continue;
+        uint32_t *line = &fb->buffer[py * pitch + x];
+        uint8_t bits = glyph[row];
+
+        for (int col = 0; col < 8; col++) {
+            int px = x + col;
+            if (px < 0 || (uint32_t)px >= fb->width) continue;
+            if (bits & (1 << (7 - col))) {
+                line[col] = fg;
+            } else if (bg != 0) {
+                line[col] = bg;
+            }
+        }
+    }
 }
 
 void kgfx_draw_char_scaled(kgfx_fb_t *fb, int x, int y, char c, uint32_t fg, uint32_t bg, int scale) {
+    if (scale <= 1) {
+        kgfx_draw_char(fb, x, y, c, fg, bg);
+        return;
+    }
     if (c < 32 || c > 126) c = '?';
-    if (scale <= 0) scale = 1;
     const uint8_t *glyph = kgfx_font8x8[c - 32];
 
     for (int row = 0; row < 8; row++) {
@@ -303,29 +330,39 @@ void kgfx_draw_char_scaled(kgfx_fb_t *fb, int x, int y, char c, uint32_t fg, uin
         for (int col = 0; col < 8; col++) {
             uint32_t col_val = (bits & (1 << (7 - col))) ? fg : bg;
             if (col_val != 0) {
-                if (scale == 1) {
-                    kgfx_draw_pixel(fb, x + col, y + row, col_val);
-                } else {
-                    kgfx_draw_rect(fb, x + col * scale, y + row * scale, scale, scale, col_val, 1);
-                }
+                kgfx_draw_rect(fb, x + col * scale, y + row * scale, scale, scale, col_val, 1);
             }
         }
     }
 }
 
 void kgfx_draw_string(kgfx_fb_t *fb, int x, int y, const char *str, uint32_t fg, uint32_t bg) {
-    kgfx_draw_string_scaled(fb, x, y, str, fg, bg, 1);
-}
-
-void kgfx_draw_string_scaled(kgfx_fb_t *fb, int x, int y, const char *str, uint32_t fg, uint32_t bg, int scale) {
     if (!str) return;
-    if (scale <= 0) scale = 1;
     int curr_x = x, curr_y = y;
 
     for (size_t i = 0; str[i] != '\0'; i++) {
         if (str[i] == '\n') {
             curr_x = x;
-            curr_y += 10 * scale;
+            curr_y += 14;
+        } else {
+            kgfx_draw_char(fb, curr_x, curr_y, str[i], fg, bg);
+            curr_x += 8;
+        }
+    }
+}
+
+void kgfx_draw_string_scaled(kgfx_fb_t *fb, int x, int y, const char *str, uint32_t fg, uint32_t bg, int scale) {
+    if (scale <= 1) {
+        kgfx_draw_string(fb, x, y, str, fg, bg);
+        return;
+    }
+    if (!str) return;
+    int curr_x = x, curr_y = y;
+
+    for (size_t i = 0; str[i] != '\0'; i++) {
+        if (str[i] == '\n') {
+            curr_x = x;
+            curr_y += 14 * scale;
         } else {
             kgfx_draw_char_scaled(fb, curr_x, curr_y, str[i], fg, bg, scale);
             curr_x += 8 * scale;
@@ -412,7 +449,6 @@ int kgfx_rect_contains(const kgfx_rect_t *rect, int x, int y) {
     return (x >= rect->x && x < (rect->x + rect->w) && y >= rect->y && y < (rect->y + rect->h));
 }
 
-/* --- VGA Mode 03h Driver (Text Mode 80x25 at 0xB8000) --- */
 static volatile kgfx_vga_cell_t *vga3h_mem = (volatile kgfx_vga_cell_t *)0xB8000;
 
 void kgfx_vga3h_putc(int col, int row, char c, uint8_t fg, uint8_t bg) {
@@ -441,7 +477,6 @@ void kgfx_vga3h_clear(uint8_t bg) {
     }
 }
 
-/* --- UART Serial Port Driver (COM1 0x3F8) --- */
 void kgfx_serial_init(void) {
     kgfx_outb(COM1_PORT + 1, 0x00);
     kgfx_outb(COM1_PORT + 3, 0x80);

@@ -350,23 +350,24 @@ void os_draw_mouse_cursor(void) {
     prev_mouse_y = mouse->y;
 }
 
-/* --- ROLAGEM SUAVE DO TERMINAL (SCROLLING SEM LIMPAR) --- */
+/* --- ROLAGEM INSTANTANEA DO TERMINAL VIA COPIA EM BLOCO --- */
 static void terminal_scroll_up(void) {
     int line_h = 14;
     int start_y = 40;
     int end_y = (int)os_fb.height - 50;
-    int scroll_w = (int)os_fb.width - 60;
+    int scroll_w = (int)os_fb.width - 60; // 740 pixels
 
     for (int y = start_y; y <= end_y - line_h; y++) {
-        size_t dst_offset = (size_t)y * os_fb.pitch + 30;
-        size_t src_offset = (size_t)(y + line_h) * os_fb.pitch + 30;
-        kmemcpy(&os_fb.buffer[dst_offset], &os_fb.buffer[src_offset], scroll_w * sizeof(uint32_t));
+        uint32_t *dst = &os_fb.buffer[y * os_fb.pitch + 30];
+        const uint32_t *src = &os_fb.buffer[(y + line_h) * os_fb.pitch + 30];
+        kmemcpy(dst, src, scroll_w * sizeof(uint32_t));
     }
 
-    // Limpa apenas a última linha rolada
+    // Limpa apenas a ultima linha
     for (int y = end_y - line_h + 1; y <= end_y; y++) {
-        for (int x = 30; x < 30 + scroll_w; x++) {
-            os_fb.buffer[y * os_fb.pitch + x] = KGFX_BLACK;
+        uint32_t *dst = &os_fb.buffer[y * os_fb.pitch + 30];
+        for (int x = 0; x < scroll_w; x++) {
+            dst[x] = KGFX_BLACK;
         }
     }
 }
@@ -392,7 +393,6 @@ static void os_putchar(char c) {
         }
     }
 
-    // Rolagem real do terminal CLI ao passar da margem inferior
     if (cursor_y > (int)os_fb.height - 50) {
         terminal_scroll_up();
         cursor_y -= 14;
@@ -429,9 +429,11 @@ static void draw_gui_desktop(void) {
 
     draw_demo_button(0);
 
+    // Botão Snake
     kgfx_draw_rounded_rect(&os_fb, game_btn.x, game_btn.y, game_btn.w, game_btn.h, 6, KGFX_GREEN, 1);
     kgfx_draw_string(&os_fb, game_btn.x + 18, game_btn.y + 11, "[*] Jogar Snake", KGFX_WHITE, KGFX_GREEN);
 
+    // Botão Calculadora GUI
     kgfx_draw_rounded_rect(&os_fb, calc_btn.x, calc_btn.y, calc_btn.w, calc_btn.h, 6, KGFX_PURPLE, 1);
     kgfx_draw_string(&os_fb, calc_btn.x + 18, calc_btn.y + 11, "[*] Calculadora GUI", KGFX_WHITE, KGFX_PURPLE);
 
@@ -440,13 +442,12 @@ static void draw_gui_desktop(void) {
     }
 }
 
-/* --- SNAKE COM RENDERIZACAO DELTA (ZERO FLICKER) --- */
+/* --- SNAKE COM ZERO FLICKER (DESENHO INCREMENTAL) --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
     snake_food.y = (int)((seed / 7) % (SNAKE_GRID_H - 2)) + 1;
 
-    // Desenha comida
     int fx = SNAKE_ORIGIN_X + snake_food.x * SNAKE_CELL_SZ;
     int fy = SNAKE_ORIGIN_Y + snake_food.y * SNAKE_CELL_SZ;
     kgfx_draw_filled_circle(&os_fb, fx + 8, fy + 8, 6, KGFX_RED);
@@ -462,7 +463,7 @@ static void start_snake_game(void) {
 
     kgfx_clear(&os_fb, KGFX_BLACK);
 
-    // Moldura do Arcade
+    // Moldura do Arcade desenhada uma única vez
     kgfx_draw_rounded_rect(&os_fb, SNAKE_ORIGIN_X - 10, SNAKE_ORIGIN_Y - 40,
                            SNAKE_GRID_W * SNAKE_CELL_SZ + 20, SNAKE_GRID_H * SNAKE_CELL_SZ + 50, 10, KGFX_CYAN, 0);
 
@@ -486,7 +487,7 @@ static void update_snake_game(void) {
     if (snake_gameover) return;
 
     uint32_t current_tick = pit_get_ticks();
-    if (current_tick - snake_last_tick < 10) return; // 10 FPS
+    if (current_tick - snake_last_tick < 10) return;
     snake_last_tick = current_tick;
 
     snake_pt_t new_head = { snake_body[0].x + snake_dir_x, snake_body[0].y + snake_dir_y };
@@ -511,18 +512,17 @@ static void update_snake_game(void) {
         }
     }
 
-    // Apaga apenas o rabo antigo
+    // Apaga apenas o rabo que se moveu (Zero Flicker)
     snake_old_tail = snake_body[snake_len - 1];
     int ox = SNAKE_ORIGIN_X + snake_old_tail.x * SNAKE_CELL_SZ;
     int oy = SNAKE_ORIGIN_Y + snake_old_tail.y * SNAKE_CELL_SZ;
     kgfx_draw_rect(&os_fb, ox, oy, SNAKE_CELL_SZ, SNAKE_CELL_SZ, KGFX_BLACK, 1);
 
-    // Converte cabeça anterior em corpo verde
+    // Transforma a cabeça anterior em corpo verde
     int old_hx = SNAKE_ORIGIN_X + snake_body[0].x * SNAKE_CELL_SZ;
     int old_hy = SNAKE_ORIGIN_Y + snake_body[0].y * SNAKE_CELL_SZ;
     kgfx_draw_rounded_rect(&os_fb, old_hx + 1, old_hy + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, KGFX_GREEN, 1);
 
-    // Move vetor da cobra
     for (int i = snake_len - 1; i > 0; i--) {
         snake_body[i] = snake_body[i - 1];
     }
@@ -533,13 +533,11 @@ static void update_snake_game(void) {
     int nhy = SNAKE_ORIGIN_Y + new_head.y * SNAKE_CELL_SZ;
     kgfx_draw_rounded_rect(&os_fb, nhx + 1, nhy + 1, SNAKE_CELL_SZ - 2, SNAKE_CELL_SZ - 2, 3, KGFX_YELLOW, 1);
 
-    // Comeu comida
     if (new_head.x == snake_food.x && new_head.y == snake_food.y) {
         if (snake_len < SNAKE_GRID_W * SNAKE_GRID_H - 1) snake_len++;
         snake_score += 10;
         ksound_beep(1400, 5, pit_get_ticks());
 
-        // Atualiza placar
         kgfx_draw_rect(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y - 35, 300, 20, KGFX_BLACK, 1);
         char score_txt[64];
         ksnprintf(score_txt, sizeof(score_txt), "SNAKE RETRO - Pontos: %d  |  ESC: Sair", snake_score);
@@ -549,7 +547,7 @@ static void update_snake_game(void) {
     }
 }
 
-/* --- KEDIT, TOP & BMP --- */
+/* --- KEDIT & TOP --- */
 static void render_editor(void) {
     kgfx_clear(&os_fb, KGFX_BLACK);
     kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 28, KGFX_BLUE, 1);
@@ -1152,10 +1150,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
             update_snake_game();
         }
 
-        if (os_mode == 0 || os_mode == 5) {
-            os_draw_mouse_cursor();
-        }
-
+        os_draw_mouse_cursor();
         __asm__ __volatile__ ("hlt");
     }
 }
