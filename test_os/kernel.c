@@ -29,7 +29,7 @@ static char current_dir[KVFS_MAX_PATH] = "/";
 static char current_user[32] = "root";
 static int is_root = 1;
 
-/* --- TERMINAL CANVAS EM RAM (90 colunas x 36 linhas) --- */
+/* --- TERMINAL CANVAS EM RAM --- */
 #define TERM_COLS 90
 #define TERM_ROWS 36
 #define TERM_X_START 30
@@ -42,7 +42,7 @@ static int is_root = 1;
 static uint32_t term_canvas[TERM_WIDTH * TERM_HEIGHT];
 static int term_col = 0;
 static int term_row = 0;
-static int term_batch_mode = 0; /* 1 = Não envia VRAM a cada letra, envia tudo no final */
+static int term_batch_mode = 0;
 
 /* Editor KEDIT */
 #define EDIT_BUF_SZ 4096
@@ -71,10 +71,9 @@ static int mouse_under_saved = 0;
 static int under_x = 0, under_y = 0, under_w = 0, under_h = 0;
 static int prev_mouse_x = 400, prev_mouse_y = 300;
 
-/* --- ATIVAÇÃO DE FPU E SSE (128 BITS) --- */
+/* --- ATIVAÇÃO DE FPU E SSE --- */
 static void enable_fpu_sse(void) {
 #if defined(__x86_64__) || defined(__i386__)
-    // 1. Configura CR0: Desativa emulação (EM=0), ativa monitor (MP=1) e erro numérico (NE=1)
     uint32_t cr0;
     __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
     cr0 &= ~(1 << 2); // Limpa EM
@@ -82,19 +81,16 @@ static void enable_fpu_sse(void) {
     cr0 |= (1 << 5);  // Seta NE
     __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0));
 
-    // 2. Configura CR4: Habilita SSE e instruções de 128 bits (OSFXSR=1 e OSXMMEXCPT=1)
     uint32_t cr4;
     __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
     cr4 |= (1 << 9);  // OSFXSR
     cr4 |= (1 << 10); // OSXMMEXCPT
     __asm__ __volatile__("mov %0, %%cr4" : : "r"(cr4));
 
-    // 3. Inicializa unidade x87 FPU
     __asm__ __volatile__("fninit");
 #endif
 }
 
-/* Streaming Non-Temporal em 128 bits (Direto para VRAM sem poluir Cache L1/L2) */
 static inline void sse_stream_vram(void *dest, const void *src, size_t num_quads_16b) {
 #if defined(__x86_64__) || defined(__i386__)
     uint8_t *d = (uint8_t *)dest;
@@ -102,13 +98,12 @@ static inline void sse_stream_vram(void *dest, const void *src, size_t num_quads
     while (num_quads_16b--) {
         __asm__ __volatile__ (
             "movups (%1), %%xmm0\n"
-            "movntdq %%xmm0, (%0)\n" // Stream direto de 128 bits para VRAM
+            "movups %%xmm0, (%0)\n"
             : : "r"(d), "r"(s) : "memory", "xmm0"
         );
         d += 16;
         s += 16;
     }
-    __asm__ __volatile__ ("sfence" : : : "memory");
 #else
     kmemcpy(dest, src, num_quads_16b * 16);
 #endif
@@ -410,7 +405,6 @@ void os_draw_mouse_cursor(void) {
     prev_mouse_y = mouse->y;
 }
 
-/* --- RENDERIZAÇÃO INSTANTÂNEA EM RAM VIA 128-BIT SSE STREAM --- */
 static void draw_char_to_canvas(char c, int cx, int cy, uint32_t fg) {
     if (c < 32 || c > 126) c = '?';
     const uint8_t *glyph = kgfx_font8x8[c - 32];
@@ -436,7 +430,7 @@ static void flush_full_canvas_to_vram(void) {
     for (int y = 0; y < TERM_HEIGHT; y++) {
         uint32_t *vram = &os_fb.buffer[(TERM_Y_START + y) * os_fb.pitch + TERM_X_START];
         const uint32_t *ram = &term_canvas[y * TERM_WIDTH];
-        sse_stream_vram(vram, ram, (TERM_WIDTH * 4) / 16); // 180 quads de 128 bits por scanline
+        sse_stream_vram(vram, ram, (TERM_WIDTH * 4) / 16);
     }
 }
 
@@ -447,7 +441,6 @@ static void terminal_scroll_ram(void) {
     size_t bottom_words = TERM_WIDTH * TERM_CHAR_H;
     kmemset(term_canvas + words_to_move, 0, bottom_words * sizeof(uint32_t));
 
-    // Se estiver digitando interativamente, atualiza a tela
     if (!term_batch_mode) {
         flush_full_canvas_to_vram();
     }
@@ -548,7 +541,7 @@ static void draw_gui_desktop(void) {
     }
 }
 
-/* --- SNAKE COM RENDERIZAÇÃO DELTA --- */
+/* --- SNAKE --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
@@ -650,7 +643,7 @@ static void update_snake_game(void) {
     }
 }
 
-/* --- KEDIT, TOP & BMP --- */
+/* --- KEDIT & TOP --- */
 static void render_editor(void) {
     mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_BLACK);
@@ -810,7 +803,6 @@ static void execute_cli_command(const char *cmd) {
         return;
     }
 
-    // Ativa modo batch: todos os prints da execução são processados em RAM em microssegundos
     term_batch_mode = 1;
 
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
@@ -1112,7 +1104,6 @@ static void execute_cli_command(const char *cmd) {
 
     print_prompt();
 
-    // Desativa modo batch e envia tudo de uma única vez via 128-bit SSE para a tela
     term_batch_mode = 0;
     flush_full_canvas_to_vram();
 }
@@ -1253,7 +1244,6 @@ void os_toggle_cli_mode(void) {
 void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     if (magic != MULTIBOOT_BOOTLOADER_MAGIC || !mb_info) return;
 
-    // 1. Ativação de FPU e SSE 128-bit
     enable_fpu_sse();
 
     uint32_t *fb_ptr = (uint32_t *)(uintptr_t)mb_info->framebuffer_addr;
