@@ -99,7 +99,7 @@ static const calc_btn_t calc_buttons[] = {
     {{CALC_WIN_X + 235, CALC_WIN_Y + 310, 70, 40}, "+",        KGFX_YELLOW}
 };
 
-/* 1. Raiz Quadrada com Bit Shift (Restoring bitwise digit-by-digit) */
+/* 1. Raiz Quadrada com Bit Shift */
 static uint32_t sqrt_bitshift(uint32_t n) {
     if (n == 0) return 0;
     uint32_t res = 0;
@@ -210,28 +210,28 @@ static void draw_toast_notification(int show) {
 static void handle_calc_click(const char *label) {
     ksound_beep(900, 4, pit_get_ticks());
 
-    if (strcmp(label, "C") == 0) {
+    if (kstrcmp(label, "C") == 0) {
         kstrncpy(calc_display, "0", sizeof(calc_display) - 1);
         calc_op = 0;
         calc_operand1 = 0;
         calc_new_num = 1;
-    } else if (strcmp(label, "r(Bit)") == 0) {
+    } else if (kstrcmp(label, "r(Bit)") == 0) {
         uint32_t val = (uint32_t)katoi(calc_display);
         uint32_t root = sqrt_bitshift(val);
         kitoa(root, calc_display, 10, 0);
         calc_new_num = 1;
-    } else if (strcmp(label, "r(Nwtn)") == 0) {
+    } else if (kstrcmp(label, "r(Nwtn)") == 0) {
         double val = (double)katoi(calc_display);
         double root = sqrt_newton_raphson(val);
         int64_t int_root = (int64_t)(root + 0.5);
         kitoa(int_root, calc_display, 10, 0);
         calc_new_num = 1;
-    } else if (strcmp(label, "+") == 0 || strcmp(label, "-") == 0 ||
-               strcmp(label, "*") == 0 || strcmp(label, "/") == 0 || strcmp(label, "^") == 0) {
+    } else if (kstrcmp(label, "+") == 0 || kstrcmp(label, "-") == 0 ||
+               kstrcmp(label, "*") == 0 || kstrcmp(label, "/") == 0 || kstrcmp(label, "^") == 0) {
         calc_operand1 = katoi(calc_display);
         calc_op = label[0];
         calc_new_num = 1;
-    } else if (strcmp(label, "=") == 0) {
+    } else if (kstrcmp(label, "=") == 0) {
         int64_t operand2 = katoi(calc_display);
         int64_t res = 0;
         if (calc_op == '+') res = calc_operand1 + operand2;
@@ -245,7 +245,7 @@ static void handle_calc_click(const char *label) {
         calc_op = 0;
         calc_new_num = 1;
     } else {
-        if (calc_new_num || strcmp(calc_display, "0") == 0) {
+        if (calc_new_num || kstrcmp(calc_display, "0") == 0) {
             kstrncpy(calc_display, label, sizeof(calc_display) - 1);
             calc_new_num = 0;
         } else {
@@ -298,12 +298,11 @@ void os_draw_mouse_cursor(void) {
 
         if (over_calc && (mouse->buttons & 1) && !btn_pressed_prev) {
             ksound_beep(1000, 6, pit_get_ticks());
-            os_mode = 5; // Abre Calculadora GUI
+            os_mode = 5;
             render_calc_window();
             return;
         }
     } else if (os_mode == 5) {
-        // Interações dentro da Calculadora GUI
         int over_any = 0;
         for (size_t i = 0; i < sizeof(calc_buttons) / sizeof(calc_buttons[0]); i++) {
             if (kgfx_rect_contains(&calc_buttons[i].rect, mouse->x, mouse->y)) {
@@ -332,20 +331,16 @@ void os_draw_mouse_cursor(void) {
 static void render_calc_window(void) {
     kgfx_clear(&os_fb, KGFX_DARKGRAY);
 
-    // Janela Principal da Calculadora
     kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X, CALC_WIN_Y, CALC_WIN_W, CALC_WIN_H, 10, KGFX_PURPLE, 1);
     kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, CALC_WIN_H - 8, 8, KGFX_NAVY, 1);
 
-    // Barra de Título
     kgfx_draw_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, 28, KGFX_PURPLE, 1);
     kgfx_draw_string(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 12, "Calculadora GUI (BitShift & Newton)", KGFX_WHITE, KGFX_PURPLE);
     kgfx_draw_string(&os_fb, CALC_WIN_X + CALC_WIN_W - 35, CALC_WIN_Y + 12, "[ESC]", KGFX_YELLOW, KGFX_PURPLE);
 
-    // Display
     kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 40, CALC_WIN_W - 30, 40, 6, KGFX_BLACK, 1);
     kgfx_draw_string_scaled(&os_fb, CALC_WIN_X + 25, CALC_WIN_Y + 48, calc_display, KGFX_GREEN, KGFX_BLACK, 2);
 
-    // Botões
     for (size_t i = 0; i < sizeof(calc_buttons) / sizeof(calc_buttons[0]); i++) {
         calc_btn_t b = calc_buttons[i];
         kgfx_draw_rounded_rect(&os_fb, b.rect.x, b.rect.y, b.rect.w, b.rect.h, 5, b.color, 1);
@@ -363,7 +358,6 @@ static void render_bmp_view(void) {
 
     const kvfs_node_t *file = kvfs_open(view_bmp_path);
     if (file && file->data && file->size > 0) {
-        // Centraliza a imagem na tela
         kbmp_render(&os_fb, (os_fb.width - 128) / 2, (os_fb.height - 128) / 2, file->data, file->size);
     } else {
         kgfx_draw_string(&os_fb, 50, 100, "Erro: Arquivo BMP nao encontrado ou invalido!", KGFX_RED, 0);
@@ -429,11 +423,9 @@ static void draw_gui_desktop(void) {
 
     draw_demo_button(0);
 
-    // Botão Snake
     kgfx_draw_rounded_rect(&os_fb, game_btn.x, game_btn.y, game_btn.w, game_btn.h, 6, KGFX_GREEN, 1);
     kgfx_draw_string(&os_fb, game_btn.x + 18, game_btn.y + 11, "[*] Jogar Snake", KGFX_WHITE, KGFX_GREEN);
 
-    // Botão Calculadora GUI
     kgfx_draw_rounded_rect(&os_fb, calc_btn.x, calc_btn.y, calc_btn.w, calc_btn.h, 6, KGFX_PURPLE, 1);
     kgfx_draw_string(&os_fb, calc_btn.x + 18, calc_btn.y + 11, "[*] Calculadora GUI", KGFX_WHITE, KGFX_PURPLE);
 
@@ -442,7 +434,6 @@ static void draw_gui_desktop(void) {
     }
 }
 
-/* --- LOGICA DO JOGO SNAKE --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
