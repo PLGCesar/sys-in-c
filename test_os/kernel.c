@@ -14,10 +14,12 @@
 #include "../freestanding/kdiskfs.c"
 #include "../freestanding/ksound.h"
 #include "../freestanding/ksound.c"
+#include "../freestanding/kbmp.h"
+#include "../freestanding/kbmp.c"
 
 static kgfx_fb_t os_fb;
 
-/* 0 = GUI, 1 = CLI, 2 = KEDIT, 3 = TOP, 4 = SNAKE GAME */
+/* 0 = GUI, 1 = CLI, 2 = KEDIT, 3 = TOP, 4 = SNAKE, 5 = CALC_GUI, 6 = BMP_VIEW */
 static int os_mode = 0;
 
 static char cli_input[128] = "";
@@ -34,9 +36,13 @@ static size_t edit_len = 0;
 static char edit_filepath[KVFS_MAX_PATH] = "";
 static char edit_status_msg[64] = "";
 
-/* Botões Interativos no Desktop */
-static kgfx_rect_t demo_btn = { .x = 30,  .y = 250, .w = 260, .h = 36 };
-static kgfx_rect_t game_btn = { .x = 310, .y = 250, .w = 240, .h = 36 };
+/* Visualizador BMP */
+static char view_bmp_path[KVFS_MAX_PATH] = "";
+
+/* Botões do Desktop */
+static kgfx_rect_t demo_btn = { .x = 30,  .y = 250, .w = 230, .h = 36 };
+static kgfx_rect_t game_btn = { .x = 280, .y = 250, .w = 220, .h = 36 };
+static kgfx_rect_t calc_btn = { .x = 520, .y = 250, .w = 230, .h = 36 };
 
 static int btn_pressed_state = 0;
 static int btn_pressed_prev = 0;
@@ -50,7 +56,90 @@ static int mouse_under_saved = 0;
 static int under_x = 0, under_y = 0, under_w = 0, under_h = 0;
 static int prev_mouse_x = 400, prev_mouse_y = 300;
 
-/* --- JOGO SNAKE (COBRINHA) --- */
+/* --- CALCULADORA GUI --- */
+#define CALC_WIN_X 240
+#define CALC_WIN_Y 110
+#define CALC_WIN_W 320
+#define CALC_WIN_H 370
+
+static char calc_display[64] = "0";
+static char calc_op = 0;
+static int64_t calc_operand1 = 0;
+static int calc_new_num = 1;
+
+typedef struct {
+    kgfx_rect_t rect;
+    const char *label;
+    uint32_t color;
+} calc_btn_t;
+
+static const calc_btn_t calc_buttons[] = {
+    {{CALC_WIN_X + 15,  CALC_WIN_Y + 90,  60, 40}, "C",        KGFX_RED},
+    {{CALC_WIN_X + 85,  CALC_WIN_Y + 90,  60, 40}, "^",        KGFX_PURPLE},
+    {{CALC_WIN_X + 155, CALC_WIN_Y + 90,  70, 40}, "r(Bit)",   KGFX_CYAN},
+    {{CALC_WIN_X + 235, CALC_WIN_Y + 90,  70, 40}, "r(Nwtn)",  KGFX_CYAN},
+
+    {{CALC_WIN_X + 15,  CALC_WIN_Y + 145, 60, 40}, "7",        KGFX_NAVY},
+    {{CALC_WIN_X + 85,  CALC_WIN_Y + 145, 60, 40}, "8",        KGFX_NAVY},
+    {{CALC_WIN_X + 155, CALC_WIN_Y + 145, 60, 40}, "9",        KGFX_NAVY},
+    {{CALC_WIN_X + 235, CALC_WIN_Y + 145, 70, 40}, "/",        KGFX_YELLOW},
+
+    {{CALC_WIN_X + 15,  CALC_WIN_Y + 200, 60, 40}, "4",        KGFX_NAVY},
+    {{CALC_WIN_X + 85,  CALC_WIN_Y + 200, 60, 40}, "5",        KGFX_NAVY},
+    {{CALC_WIN_X + 155, CALC_WIN_Y + 200, 60, 40}, "6",        KGFX_NAVY},
+    {{CALC_WIN_X + 235, CALC_WIN_Y + 200, 70, 40}, "*",        KGFX_YELLOW},
+
+    {{CALC_WIN_X + 15,  CALC_WIN_Y + 255, 60, 40}, "1",        KGFX_NAVY},
+    {{CALC_WIN_X + 85,  CALC_WIN_Y + 255, 60, 40}, "2",        KGFX_NAVY},
+    {{CALC_WIN_X + 155, CALC_WIN_Y + 255, 60, 40}, "3",        KGFX_NAVY},
+    {{CALC_WIN_X + 235, CALC_WIN_Y + 255, 70, 40}, "-",        KGFX_YELLOW},
+
+    {{CALC_WIN_X + 15,  CALC_WIN_Y + 310, 60, 40}, "0",        KGFX_NAVY},
+    {{CALC_WIN_X + 85,  CALC_WIN_Y + 310, 130, 40}, "=",       KGFX_GREEN},
+    {{CALC_WIN_X + 235, CALC_WIN_Y + 310, 70, 40}, "+",        KGFX_YELLOW}
+};
+
+/* 1. Raiz Quadrada com Bit Shift (Restoring bitwise digit-by-digit) */
+static uint32_t sqrt_bitshift(uint32_t n) {
+    if (n == 0) return 0;
+    uint32_t res = 0;
+    uint32_t bit = 1U << 30;
+    while (bit > n) bit >>= 2;
+    while (bit != 0) {
+        if (n >= res + bit) {
+            n -= res + bit;
+            res = (res >> 1) + bit;
+        } else {
+            res >>= 1;
+        }
+        bit >>= 2;
+    }
+    return res;
+}
+
+/* 2. Raiz Quadrada pelo Método de Newton-Raphson */
+static double sqrt_newton_raphson(double s) {
+    if (s <= 0.0) return 0.0;
+    double x = s;
+    for (int i = 0; i < 15; i++) {
+        x = 0.5 * (x + s / x);
+    }
+    return x;
+}
+
+/* 3. Potência Inteira */
+static int64_t int_pow(int64_t base, int64_t exp) {
+    if (exp < 0) return 0;
+    int64_t res = 1;
+    while (exp > 0) {
+        if (exp & 1) res *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return res;
+}
+
+/* --- JOGO SNAKE --- */
 #define SNAKE_GRID_W 28
 #define SNAKE_GRID_H 20
 #define SNAKE_CELL_SZ 16
@@ -68,26 +157,7 @@ static uint32_t snake_last_tick = 0;
 
 static void draw_gui_desktop(void);
 static void start_snake_game(void);
-
-static void draw_demo_button(int pressed) {
-    if (pressed) {
-        kgfx_draw_rounded_rect(&os_fb, demo_btn.x + 2, demo_btn.y + 2, demo_btn.w - 4, demo_btn.h - 4, 6, KGFX_BLUE, 1);
-        kgfx_draw_string(&os_fb, demo_btn.x + 20, demo_btn.y + 12, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_BLUE);
-    } else {
-        kgfx_draw_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, KGFX_DARKGRAY, 1);
-        kgfx_draw_rounded_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, 6, KGFX_PURPLE, 1);
-        kgfx_draw_string(&os_fb, demo_btn.x + 18, demo_btn.y + 11, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_PURPLE);
-    }
-}
-
-static void draw_toast_notification(int show) {
-    if (show) {
-        kgfx_draw_rounded_rect(&os_fb, 30, 305, 540, 42, 8, kgfx_argb(230, 49, 50, 68), 1);
-        kgfx_draw_string(&os_fb, 45, 320, "[!] Clique detectado com som! Mensagem sumira em 5s.", KGFX_GREEN, 0);
-    } else {
-        kgfx_draw_rect(&os_fb, 25, 300, 550, 52, KGFX_DARKGRAY, 1);
-    }
-}
+static void render_calc_window(void);
 
 static void save_mouse_under(int x, int y, int w, int h) {
     under_x = x; under_y = y; under_w = w; under_h = h;
@@ -117,42 +187,134 @@ static void restore_mouse_under(void) {
     mouse_under_saved = 0;
 }
 
+static void draw_demo_button(int pressed) {
+    if (pressed) {
+        kgfx_draw_rounded_rect(&os_fb, demo_btn.x + 2, demo_btn.y + 2, demo_btn.w - 4, demo_btn.h - 4, 6, KGFX_BLUE, 1);
+        kgfx_draw_string(&os_fb, demo_btn.x + 18, demo_btn.y + 12, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_BLUE);
+    } else {
+        kgfx_draw_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, KGFX_DARKGRAY, 1);
+        kgfx_draw_rounded_rect(&os_fb, demo_btn.x, demo_btn.y, demo_btn.w, demo_btn.h, 6, KGFX_PURPLE, 1);
+        kgfx_draw_string(&os_fb, demo_btn.x + 16, demo_btn.y + 11, "[*] Testar Botao Clicavel", KGFX_WHITE, KGFX_PURPLE);
+    }
+}
+
+static void draw_toast_notification(int show) {
+    if (show) {
+        kgfx_draw_rounded_rect(&os_fb, 30, 305, 540, 42, 8, kgfx_argb(230, 49, 50, 68), 1);
+        kgfx_draw_string(&os_fb, 45, 320, "[!] Clique detectado com som! Mensagem sumira em 5s.", KGFX_GREEN, 0);
+    } else {
+        kgfx_draw_rect(&os_fb, 25, 300, 550, 52, KGFX_DARKGRAY, 1);
+    }
+}
+
+static void handle_calc_click(const char *label) {
+    ksound_beep(900, 4, pit_get_ticks());
+
+    if (strcmp(label, "C") == 0) {
+        kstrncpy(calc_display, "0", sizeof(calc_display) - 1);
+        calc_op = 0;
+        calc_operand1 = 0;
+        calc_new_num = 1;
+    } else if (strcmp(label, "r(Bit)") == 0) {
+        uint32_t val = (uint32_t)katoi(calc_display);
+        uint32_t root = sqrt_bitshift(val);
+        kitoa(root, calc_display, 10, 0);
+        calc_new_num = 1;
+    } else if (strcmp(label, "r(Nwtn)") == 0) {
+        double val = (double)katoi(calc_display);
+        double root = sqrt_newton_raphson(val);
+        int64_t int_root = (int64_t)(root + 0.5);
+        kitoa(int_root, calc_display, 10, 0);
+        calc_new_num = 1;
+    } else if (strcmp(label, "+") == 0 || strcmp(label, "-") == 0 ||
+               strcmp(label, "*") == 0 || strcmp(label, "/") == 0 || strcmp(label, "^") == 0) {
+        calc_operand1 = katoi(calc_display);
+        calc_op = label[0];
+        calc_new_num = 1;
+    } else if (strcmp(label, "=") == 0) {
+        int64_t operand2 = katoi(calc_display);
+        int64_t res = 0;
+        if (calc_op == '+') res = calc_operand1 + operand2;
+        else if (calc_op == '-') res = calc_operand1 - operand2;
+        else if (calc_op == '*') res = calc_operand1 * operand2;
+        else if (calc_op == '/') res = (operand2 != 0) ? (calc_operand1 / operand2) : 0;
+        else if (calc_op == '^') res = int_pow(calc_operand1, operand2);
+        else res = operand2;
+
+        kitoa(res, calc_display, 10, 0);
+        calc_op = 0;
+        calc_new_num = 1;
+    } else {
+        if (calc_new_num || strcmp(calc_display, "0") == 0) {
+            kstrncpy(calc_display, label, sizeof(calc_display) - 1);
+            calc_new_num = 0;
+        } else {
+            size_t l = kstrlen(calc_display);
+            if (l < sizeof(calc_display) - 2) {
+                calc_display[l] = label[0];
+                calc_display[l + 1] = '\0';
+            }
+        }
+    }
+    render_calc_window();
+}
+
 void os_draw_mouse_cursor(void) {
-    if (os_mode != 0) return;
     kgfx_mouse_t *mouse = ps2_get_mouse_state();
 
-    int over_btn = kgfx_rect_contains(&demo_btn, mouse->x, mouse->y);
-    int over_game = kgfx_rect_contains(&game_btn, mouse->x, mouse->y);
+    if (os_mode == 0) {
+        int over_btn = kgfx_rect_contains(&demo_btn, mouse->x, mouse->y);
+        int over_game = kgfx_rect_contains(&game_btn, mouse->x, mouse->y);
+        int over_calc = kgfx_rect_contains(&calc_btn, mouse->x, mouse->y);
 
-    if (over_btn || over_game) {
-        mouse->type = KGFX_CURSOR_CLICKABLE;
-    } else {
-        mouse->type = KGFX_CURSOR_NORMAL;
-    }
+        if (over_btn || over_game || over_calc) {
+            mouse->type = KGFX_CURSOR_CLICKABLE;
+        } else {
+            mouse->type = KGFX_CURSOR_NORMAL;
+        }
 
-    // Clique e Animação no Botão Demo
-    if (over_btn) {
-        if ((mouse->buttons & 1) && !btn_pressed_prev) {
-            btn_pressed_state = 1;
-            draw_demo_button(1);
-            ksound_beep(880, 4, pit_get_ticks()); // Som de clique
-            toast_active = 1;
-            toast_expire_tick = pit_get_ticks() + 500;
-            draw_toast_notification(1);
-        } else if (!(mouse->buttons & 1) && btn_pressed_state) {
+        if (over_btn) {
+            if ((mouse->buttons & 1) && !btn_pressed_prev) {
+                btn_pressed_state = 1;
+                draw_demo_button(1);
+                ksound_beep(880, 4, pit_get_ticks());
+                toast_active = 1;
+                toast_expire_tick = pit_get_ticks() + 500;
+                draw_toast_notification(1);
+            } else if (!(mouse->buttons & 1) && btn_pressed_state) {
+                btn_pressed_state = 0;
+                draw_demo_button(0);
+            }
+        } else if (btn_pressed_state) {
             btn_pressed_state = 0;
             draw_demo_button(0);
         }
-    } else if (btn_pressed_state) {
-        btn_pressed_state = 0;
-        draw_demo_button(0);
-    }
 
-    // Clique no Botão do Jogo Snake
-    if (over_game && (mouse->buttons & 1) && !btn_pressed_prev) {
-        ksound_beep(1200, 6, pit_get_ticks());
-        start_snake_game();
-        return;
+        if (over_game && (mouse->buttons & 1) && !btn_pressed_prev) {
+            ksound_beep(1200, 6, pit_get_ticks());
+            start_snake_game();
+            return;
+        }
+
+        if (over_calc && (mouse->buttons & 1) && !btn_pressed_prev) {
+            ksound_beep(1000, 6, pit_get_ticks());
+            os_mode = 5; // Abre Calculadora GUI
+            render_calc_window();
+            return;
+        }
+    } else if (os_mode == 5) {
+        // Interações dentro da Calculadora GUI
+        int over_any = 0;
+        for (size_t i = 0; i < sizeof(calc_buttons) / sizeof(calc_buttons[0]); i++) {
+            if (kgfx_rect_contains(&calc_buttons[i].rect, mouse->x, mouse->y)) {
+                over_any = 1;
+                if ((mouse->buttons & 1) && !btn_pressed_prev) {
+                    handle_calc_click(calc_buttons[i].label);
+                }
+                break;
+            }
+        }
+        mouse->type = over_any ? KGFX_CURSOR_CLICKABLE : KGFX_CURSOR_NORMAL;
     }
 
     btn_pressed_prev = (mouse->buttons & 1);
@@ -165,6 +327,47 @@ void os_draw_mouse_cursor(void) {
 
     prev_mouse_x = mouse->x;
     prev_mouse_y = mouse->y;
+}
+
+static void render_calc_window(void) {
+    kgfx_clear(&os_fb, KGFX_DARKGRAY);
+
+    // Janela Principal da Calculadora
+    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X, CALC_WIN_Y, CALC_WIN_W, CALC_WIN_H, 10, KGFX_PURPLE, 1);
+    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, CALC_WIN_H - 8, 8, KGFX_NAVY, 1);
+
+    // Barra de Título
+    kgfx_draw_rect(&os_fb, CALC_WIN_X + 4, CALC_WIN_Y + 4, CALC_WIN_W - 8, 28, KGFX_PURPLE, 1);
+    kgfx_draw_string(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 12, "Calculadora GUI (BitShift & Newton)", KGFX_WHITE, KGFX_PURPLE);
+    kgfx_draw_string(&os_fb, CALC_WIN_X + CALC_WIN_W - 35, CALC_WIN_Y + 12, "[ESC]", KGFX_YELLOW, KGFX_PURPLE);
+
+    // Display
+    kgfx_draw_rounded_rect(&os_fb, CALC_WIN_X + 15, CALC_WIN_Y + 40, CALC_WIN_W - 30, 40, 6, KGFX_BLACK, 1);
+    kgfx_draw_string_scaled(&os_fb, CALC_WIN_X + 25, CALC_WIN_Y + 48, calc_display, KGFX_GREEN, KGFX_BLACK, 2);
+
+    // Botões
+    for (size_t i = 0; i < sizeof(calc_buttons) / sizeof(calc_buttons[0]); i++) {
+        calc_btn_t b = calc_buttons[i];
+        kgfx_draw_rounded_rect(&os_fb, b.rect.x, b.rect.y, b.rect.w, b.rect.h, 5, b.color, 1);
+        kgfx_draw_string(&os_fb, b.rect.x + 15, b.rect.y + 14, b.label, KGFX_WHITE, b.color);
+    }
+}
+
+static void render_bmp_view(void) {
+    kgfx_clear(&os_fb, KGFX_BLACK);
+
+    kgfx_draw_rect(&os_fb, 0, 0, os_fb.width, 30, KGFX_BLUE, 1);
+    char title[128];
+    ksnprintf(title, sizeof(title), "Visualizador BMP - %s  (Pressione ESC para fechar)", view_bmp_path);
+    kgfx_draw_string(&os_fb, 20, 10, title, KGFX_WHITE, KGFX_BLUE);
+
+    const kvfs_node_t *file = kvfs_open(view_bmp_path);
+    if (file && file->data && file->size > 0) {
+        // Centraliza a imagem na tela
+        kbmp_render(&os_fb, (os_fb.width - 128) / 2, (os_fb.height - 128) / 2, file->data, file->size);
+    } else {
+        kgfx_draw_string(&os_fb, 50, 100, "Erro: Arquivo BMP nao encontrado ou invalido!", KGFX_RED, 0);
+    }
 }
 
 static void os_putchar(char c) {
@@ -208,7 +411,7 @@ static void draw_gui_desktop(void) {
     kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.6", KGFX_WHITE, KGFX_BLUE, 2);
 
     kgfx_draw_rect_alpha(&os_fb, 20, 60, os_fb.width - 40, 45, kgfx_argb(180, 24, 24, 37));
-    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] para o Terminal CLI! Use 'snake' ou clique no botao para o jogo!", KGFX_YELLOW, 0);
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] para o CLI! Clique nos botoes abaixo para Jogos e Apps!", KGFX_YELLOW, 0);
 
     kgfx_draw_filled_circle(&os_fb, os_fb.width - 80, 180, 35, KGFX_PURPLE);
     kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, os_fb.width - 110, 150, os_fb.width - 70, 220, KGFX_GREEN, 1);
@@ -224,12 +427,15 @@ static void draw_gui_desktop(void) {
     kgfx_draw_string(&os_fb, 30, 190, "  * Multi-User Engine : User Authentication Active (whoami / su / adduser)", KGFX_CYAN, 0);
     kgfx_draw_string(&os_fb, 30, 210, "  * Sound & Timer     : PC Speaker Audio (0x61) + PIT 100Hz Active", KGFX_CYAN, 0);
 
-    // Botão Demo
     draw_demo_button(0);
 
-    // Botão do Jogo Snake
+    // Botão Snake
     kgfx_draw_rounded_rect(&os_fb, game_btn.x, game_btn.y, game_btn.w, game_btn.h, 6, KGFX_GREEN, 1);
-    kgfx_draw_string(&os_fb, game_btn.x + 18, game_btn.y + 11, "[*] Jogar Snake (Cobrinha)", KGFX_WHITE, KGFX_GREEN);
+    kgfx_draw_string(&os_fb, game_btn.x + 18, game_btn.y + 11, "[*] Jogar Snake", KGFX_WHITE, KGFX_GREEN);
+
+    // Botão Calculadora GUI
+    kgfx_draw_rounded_rect(&os_fb, calc_btn.x, calc_btn.y, calc_btn.w, calc_btn.h, 6, KGFX_PURPLE, 1);
+    kgfx_draw_string(&os_fb, calc_btn.x + 18, calc_btn.y + 11, "[*] Calculadora GUI", KGFX_WHITE, KGFX_PURPLE);
 
     if (toast_active) {
         draw_toast_notification(1);
@@ -244,7 +450,7 @@ static void spawn_snake_food(void) {
 }
 
 static void start_snake_game(void) {
-    os_mode = 4; // Modo Snake
+    os_mode = 4;
     snake_len = 4;
     snake_score = 0;
     snake_gameover = 0;
@@ -262,21 +468,17 @@ static void start_snake_game(void) {
 static void render_snake_frame(void) {
     kgfx_clear(&os_fb, KGFX_BLACK);
 
-    // Borda do Arcade
     kgfx_draw_rounded_rect(&os_fb, SNAKE_ORIGIN_X - 10, SNAKE_ORIGIN_Y - 40,
                            SNAKE_GRID_W * SNAKE_CELL_SZ + 20, SNAKE_GRID_H * SNAKE_CELL_SZ + 50, 10, KGFX_CYAN, 0);
 
-    // Placar
     char score_txt[64];
     ksnprintf(score_txt, sizeof(score_txt), "SNAKE RETRO - Pontos: %d  |  ESC: Sair", snake_score);
     kgfx_draw_string_scaled(&os_fb, SNAKE_ORIGIN_X + 20, SNAKE_ORIGIN_Y - 30, score_txt, KGFX_YELLOW, 0, 1);
 
-    // Maçã
     int fx = SNAKE_ORIGIN_X + snake_food.x * SNAKE_CELL_SZ;
     int fy = SNAKE_ORIGIN_Y + snake_food.y * SNAKE_CELL_SZ;
     kgfx_draw_filled_circle(&os_fb, fx + 8, fy + 8, 6, KGFX_RED);
 
-    // Corpo da Cobrinha
     for (int i = 0; i < snake_len; i++) {
         int bx = SNAKE_ORIGIN_X + snake_body[i].x * SNAKE_CELL_SZ;
         int by = SNAKE_ORIGIN_Y + snake_body[i].y * SNAKE_CELL_SZ;
@@ -295,19 +497,17 @@ static void update_snake_game(void) {
     if (snake_gameover) return;
 
     uint32_t current_tick = pit_get_ticks();
-    if (current_tick - snake_last_tick < 10) return; // 10 FPS
+    if (current_tick - snake_last_tick < 10) return;
     snake_last_tick = current_tick;
 
     snake_pt_t new_head = { snake_body[0].x + snake_dir_x, snake_body[0].y + snake_dir_y };
 
-    // Colisão com parede
     if (new_head.x < 0 || new_head.x >= SNAKE_GRID_W || new_head.y < 0 || new_head.y >= SNAKE_GRID_H) {
         snake_gameover = 1;
-        ksound_beep(150, 30, pit_get_ticks()); // Som de Game Over
+        ksound_beep(150, 30, pit_get_ticks());
         return;
     }
 
-    // Colisão com próprio corpo
     for (int i = 0; i < snake_len; i++) {
         if (snake_body[i].x == new_head.x && snake_body[i].y == new_head.y) {
             snake_gameover = 1;
@@ -316,17 +516,15 @@ static void update_snake_game(void) {
         }
     }
 
-    // Move o corpo
     for (int i = snake_len - 1; i > 0; i--) {
         snake_body[i] = snake_body[i - 1];
     }
     snake_body[0] = new_head;
 
-    // Comeu a comida
     if (new_head.x == snake_food.x && new_head.y == snake_food.y) {
         if (snake_len < SNAKE_GRID_W * SNAKE_GRID_H - 1) snake_len++;
         snake_score += 10;
-        ksound_beep(1400, 5, pit_get_ticks()); // Som de comida
+        ksound_beep(1400, 5, pit_get_ticks());
         spawn_snake_food();
     }
 
@@ -475,9 +673,11 @@ static void execute_cli_command(const char *cmd) {
 
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
         kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema]\n");
+        kprintf("    • calc_gui           : Abrir Calculadora Grafica Flutuante\n");
+        kprintf("    • view <arquivo.bmp> : Visualizador de Imagens BMP\n");
         kprintf("    • snake / game       : Jogo retro Snake (Cobrinha)\n");
         kprintf("    • beep [freq] [ms]   : Emitir som no PC Speaker\n");
-        kprintf("    • edit / nano <arq>  : Editor de texto visual\n");
+        kprintf("    • edit / nano <arq>  : Editor de texto visual de tela cheia\n");
         kprintf("    • top                : Monitor de processos em tempo real\n");
         kprintf("    • uptime             : Tempo de atividade do hardware\n");
         kprintf("    • ls [dir]           : Listar arquivos e pastas\n");
@@ -496,6 +696,19 @@ static void execute_cli_command(const char *cmd) {
         kprintf("    • mem                : Memoria heap KMEM\n");
         kprintf("    • clear              : Limpar tela\n");
         kprintf("    • exit               : Voltar ao modo GUI\n");
+    } else if (kstrcmp(cmd, "calc_gui") == 0 || kstrcmp(cmd, "calc") == 0) {
+        os_mode = 5;
+        render_calc_window();
+        return;
+    } else if (kstrncmp(cmd, "view ", 5) == 0) {
+        const char *t = cmd + 5;
+        while (*t == ' ') t++;
+        if (*t) {
+            resolve_path(t, view_bmp_path, sizeof(view_bmp_path));
+            os_mode = 6;
+            render_bmp_view();
+        }
+        return;
     } else if (kstrcmp(cmd, "snake") == 0 || kstrcmp(cmd, "game") == 0) {
         start_snake_game();
         return;
@@ -802,7 +1015,7 @@ void os_handle_keypress(char c) {
             kprintf("\n[Exited top - Returned to Shell]\n\n");
             print_prompt();
         }
-    } else if (os_mode == 4) { // Jogo Snake
+    } else if (os_mode == 4) {
         if (c == 'w' || c == 'W') {
             if (snake_dir_y == 0) { snake_dir_x = 0; snake_dir_y = -1; }
         } else if (c == 's' || c == 'S') {
@@ -818,11 +1031,33 @@ void os_handle_keypress(char c) {
             mouse_under_saved = 0;
             draw_gui_desktop();
         }
+    } else if (os_mode == 5) {
+        if (c == 27) {
+            os_mode = 0;
+            mouse_under_saved = 0;
+            draw_gui_desktop();
+        } else if (c >= '0' && c <= '9') {
+            char s[2] = {c, '\0'};
+            handle_calc_click(s);
+        } else if (c == '+' || c == '-' || c == '*' || c == '/' || c == '^' || c == '=' || c == 'c' || c == 'C') {
+            char s[2] = {c == 'c' ? 'C' : c, '\0'};
+            handle_calc_click(s);
+        } else if (c == '\n') {
+            handle_calc_click("=");
+        }
+    } else if (os_mode == 6) {
+        if (c == 27 || c == 'q' || c == 'Q') {
+            os_mode = 1;
+            kgfx_clear(&os_fb, KGFX_BLACK);
+            kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
+            kprintf("\n[Exited BMP View - Returned to Shell]\n\n");
+            print_prompt();
+        }
     }
 }
 
 void os_toggle_cli_mode(void) {
-    if (os_mode == 2 || os_mode == 3 || os_mode == 4) {
+    if (os_mode == 2 || os_mode == 3 || os_mode == 4 || os_mode == 5 || os_mode == 6) {
         os_mode = 0;
         mouse_under_saved = 0;
         draw_gui_desktop();
@@ -874,13 +1109,11 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
         uint32_t cur_ticks = pit_get_ticks();
         ksound_update(cur_ticks);
 
-        // Desativa notificação após 5 segundos sem piscar a tela
         if (os_mode == 0 && toast_active && cur_ticks >= toast_expire_tick) {
             toast_active = 0;
             draw_toast_notification(0);
         }
 
-        // Loop do Snake
         if (os_mode == 4) {
             update_snake_game();
         }

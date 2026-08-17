@@ -28,6 +28,7 @@ static void print_general_help(void) {
     printf("  netclip    - P2P local network clipboard & file transfer (Termux <-> PC)\n");
     printf("  snc        - IPv4 Subnet Calculator & CIDR analyzer with detailed binary table\n");
     printf("  jsonview   - JSON syntax highlighter, validator & shorthand converter\n");
+    printf("  speedtest  - Internet speed (Mbps download) & latency/jitter test via CDN\n");
     printf("  utils-help - Display help guide for commands\n");
     printf("======================\n");
 }

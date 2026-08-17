@@ -1,6 +1,7 @@
 #include "kvfs.h"
 #include "kstring.h"
 #include "kmem.h"
+#include "kbmp.h"
 
 static kvfs_node_t vfs_table[KVFS_MAX_NODES];
 static size_t vfs_node_count = 0;
@@ -23,10 +24,14 @@ static const char bin_ls_help[] = "[BIN] ls [dir] - Lista arquivos\n";
 static const char bin_cd_help[] = "[BIN] cd <dir> - Navega entre pastas\n";
 static const char bin_pwd_help[] = "[BIN] pwd - Diretorio atual\n";
 static const char bin_cat_help[] = "[BIN] cat <path> - Exibe arquivo\n";
+static const char bin_view_help[] = "[BIN] view <arquivo.bmp> - Visualizador de imagens BMP\n";
+static const char bin_calc_help[] = "[BIN] calc_gui - Calculadora visual flutuante\n";
+static const char bin_snake_help[] = "[BIN] snake - Jogo retro Cobrinha\n";
+static const char bin_beep_help[] = "[BIN] beep [freq] [ms] - Emite som no PC Speaker\n";
 static const char bin_write_help[] = "[BIN] write <path> <texto> - Cria/escreve arquivo persistente no disco\n";
 static const char bin_touch_help[] = "[BIN] touch <path> - Cria arquivo vazio\n";
 static const char bin_mkdir_help[] = "[BIN] mkdir <path> - Cria diretorio\n";
-static const char bin_rm_help[] = "[BIN] rm <path> - Deleta arquivo do disco e da memoria\n";
+static const char bin_rm_help[] = "[BIN] rm <path> - Deleta arquivo do disco\n";
 static const char bin_whoami_help[] = "[BIN] whoami - Exibe o usuario atual\n";
 static const char bin_su_help[] = "[BIN] su <usuario> - Alterna de usuario com senha\n";
 static const char bin_adduser_help[] = "[BIN] adduser <usuario> <senha> - Cria novo usuario\n";
@@ -35,6 +40,34 @@ static const char bin_clear_help[] = "[BIN] clear - Limpa tela\n";
 static const char bin_ata_help[] = "[BIN] ata [info|0] - Testa disco ATA\n";
 static const char bin_format_help[] = "[BIN] format_disk - Formata disk.img com KSFS\n";
 static const char bin_exit_help[] = "[BIN] exit - Retorna ao GUI\n";
+
+// Gera imagem BMP 32x32 de demonstração na memória
+static uint8_t sample_bmp_buffer[sizeof(kbmp_header_t) + (32 * 32 * 3)];
+
+static void generate_sample_bmp(void) {
+    kbmp_header_t *hdr = (kbmp_header_t *)sample_bmp_buffer;
+    kmemset(sample_bmp_buffer, 0, sizeof(sample_bmp_buffer));
+
+    hdr->type = 0x4D42; // "BM"
+    hdr->size = sizeof(sample_bmp_buffer);
+    hdr->offset = sizeof(kbmp_header_t);
+    hdr->header_size = 40;
+    hdr->width = 32;
+    hdr->height = 32;
+    hdr->planes = 1;
+    hdr->bpp = 24;
+    hdr->image_size = 32 * 32 * 3;
+
+    uint8_t *px = sample_bmp_buffer + sizeof(kbmp_header_t);
+    for (int y = 0; y < 32; y++) {
+        for (int x = 0; x < 32; x++) {
+            int idx = (y * 32 + x) * 3;
+            px[idx + 0] = (uint8_t)(x * 8);       // B
+            px[idx + 1] = (uint8_t)(y * 8);       // G
+            px[idx + 2] = (uint8_t)((x + y) * 4); // R
+        }
+    }
+}
 
 static void sanitize_path(const char *in, char *out, size_t max_len) {
     size_t j = 0;
@@ -63,6 +96,8 @@ void kvfs_init(void) {
     }
     vfs_node_count = 0;
 
+    generate_sample_bmp();
+
     kvfs_mkdir("/");
     kvfs_mkdir("/bin");
     kvfs_mkdir("/etc");
@@ -71,11 +106,16 @@ void kvfs_init(void) {
     kvfs_mkdir("/home/user");
 
     kvfs_create("/readme.txt", readme_root, sizeof(readme_root) - 1, KVFS_TYPE_FILE, 0644);
+    kvfs_create("/home/logo.bmp", sample_bmp_buffer, sizeof(sample_bmp_buffer), KVFS_TYPE_FILE, 0644);
 
     kvfs_create("/bin/ls", bin_ls_help, sizeof(bin_ls_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/cd", bin_cd_help, sizeof(bin_cd_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/pwd", bin_pwd_help, sizeof(bin_pwd_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/cat", bin_cat_help, sizeof(bin_cat_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/view", bin_view_help, sizeof(bin_view_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/calc_gui", bin_calc_help, sizeof(bin_calc_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/snake", bin_snake_help, sizeof(bin_snake_help) - 1, KVFS_TYPE_BIN, 0755);
+    kvfs_create("/bin/beep", bin_beep_help, sizeof(bin_beep_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/write", bin_write_help, sizeof(bin_write_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/touch", bin_touch_help, sizeof(bin_touch_help) - 1, KVFS_TYPE_BIN, 0755);
     kvfs_create("/bin/mkdir", bin_mkdir_help, sizeof(bin_mkdir_help) - 1, KVFS_TYPE_BIN, 0755);
@@ -113,7 +153,6 @@ int kvfs_create(const char *path, const void *data, size_t size, uint8_t type, u
     char clean_path[KVFS_MAX_PATH];
     sanitize_path(path, clean_path, sizeof(clean_path));
 
-    // Se já existir, sobrescreve
     for (size_t i = 0; i < KVFS_MAX_NODES; i++) {
         if (vfs_table[i].is_used && kstrcmp(vfs_table[i].path, clean_path) == 0) {
             if (vfs_table[i].is_dynamic && vfs_table[i].data) kfree((void *)vfs_table[i].data);
