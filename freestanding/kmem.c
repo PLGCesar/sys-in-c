@@ -25,12 +25,25 @@ static inline void unlock_heap(void) {
     if (kmem_unlock_hook) kmem_unlock_hook();
 }
 
-/* Cópia rápida acelerada de memória em 32-bit / 64-bit */
+/* Cópia acelerada em 128-bit / 32-bit */
 void *kmemcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
 
-    // Alinhamento e cópia em blocos de 4 bytes (32-bit dwords)
+#if defined(__x86_64__) || defined(__i386__)
+    // Cópia em blocos de 16 bytes (128 bits)
+    while (n >= 16) {
+        __asm__ __volatile__ (
+            "movups (%1), %%xmm0\n"
+            "movups %%xmm0, (%0)\n"
+            : : "r"(d), "r"(s) : "memory", "xmm0"
+        );
+        d += 16;
+        s += 16;
+        n -= 16;
+    }
+#endif
+
     while (n >= 4 && (((uintptr_t)d & 3) == 0) && (((uintptr_t)s & 3) == 0)) {
         *(uint32_t *)d = *(const uint32_t *)s;
         d += 4;
@@ -44,7 +57,6 @@ void *kmemcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
-/* Preenchimento rápido acelerado de memória */
 void *kmemset(void *s, int c, size_t n) {
     uint8_t *p = (uint8_t *)s;
     uint8_t byte_val = (uint8_t)c;

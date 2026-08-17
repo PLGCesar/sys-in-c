@@ -29,7 +29,7 @@ static char current_dir[KVFS_MAX_PATH] = "/";
 static char current_user[32] = "root";
 static int is_root = 1;
 
-/* --- TERMINAL CANVAS EM RAM (ZERO MMIO READ TRAPS) --- */
+/* --- TERMINAL CANVAS EM RAM (90 colunas x 36 linhas) --- */
 #define TERM_COLS 90
 #define TERM_ROWS 36
 #define TERM_X_START 30
@@ -42,6 +42,7 @@ static int is_root = 1;
 static uint32_t term_canvas[TERM_WIDTH * TERM_HEIGHT];
 static int term_col = 0;
 static int term_row = 0;
+static int term_batch_mode = 0; /* 1 = Não envia VRAM a cada letra, envia tudo no final */
 
 /* Editor KEDIT */
 #define EDIT_BUF_SZ 4096
@@ -69,6 +70,49 @@ static uint32_t mouse_under_buf[MOUSE_BUF_SZ * MOUSE_BUF_SZ];
 static int mouse_under_saved = 0;
 static int under_x = 0, under_y = 0, under_w = 0, under_h = 0;
 static int prev_mouse_x = 400, prev_mouse_y = 300;
+
+/* --- ATIVAÇÃO DE FPU E SSE (128 BITS) --- */
+static void enable_fpu_sse(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    // 1. Configura CR0: Desativa emulação (EM=0), ativa monitor (MP=1) e erro numérico (NE=1)
+    uint32_t cr0;
+    __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1 << 2); // Limpa EM
+    cr0 |= (1 << 1);  // Seta MP
+    cr0 |= (1 << 5);  // Seta NE
+    __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0));
+
+    // 2. Configura CR4: Habilita SSE e instruções de 128 bits (OSFXSR=1 e OSXMMEXCPT=1)
+    uint32_t cr4;
+    __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1 << 9);  // OSFXSR
+    cr4 |= (1 << 10); // OSXMMEXCPT
+    __asm__ __volatile__("mov %0, %%cr4" : : "r"(cr4));
+
+    // 3. Inicializa unidade x87 FPU
+    __asm__ __volatile__("fninit");
+#endif
+}
+
+/* Streaming Non-Temporal em 128 bits (Direto para VRAM sem poluir Cache L1/L2) */
+static inline void sse_stream_vram(void *dest, const void *src, size_t num_quads_16b) {
+#if defined(__x86_64__) || defined(__i386__)
+    uint8_t *d = (uint8_t *)dest;
+    const uint8_t *s = (const uint8_t *)src;
+    while (num_quads_16b--) {
+        __asm__ __volatile__ (
+            "movups (%1), %%xmm0\n"
+            "movntdq %%xmm0, (%0)\n" // Stream direto de 128 bits para VRAM
+            : : "r"(d), "r"(s) : "memory", "xmm0"
+        );
+        d += 16;
+        s += 16;
+    }
+    __asm__ __volatile__ ("sfence" : : : "memory");
+#else
+    kmemcpy(dest, src, num_quads_16b * 16);
+#endif
+}
 
 /* --- CALCULADORA GUI --- */
 #define CALC_WIN_X 240
@@ -170,30 +214,7 @@ static uint32_t snake_last_tick = 0;
 static void draw_gui_desktop(void);
 static void start_snake_game(void);
 static void update_calc_display_only(void);
-
-#if defined(__x86_64__) || defined(__i386__)
-static inline void fast_copy_dwords(void *dest, const void *src, size_t n_dwords) {
-    __asm__ __volatile__ ("cld; rep movsl"
-                          : "+D"(dest), "+S"(src), "+c"(n_dwords)
-                          : : "memory");
-}
-static inline void fast_set_dwords(void *dest, uint32_t val, size_t n_dwords) {
-    __asm__ __volatile__ ("cld; rep stosl"
-                          : "+D"(dest), "+c"(n_dwords)
-                          : "a"(val)
-                          : "memory");
-}
-#else
-static inline void fast_copy_dwords(void *dest, const void *src, size_t n_dwords) {
-    uint32_t *d = (uint32_t *)dest;
-    const uint32_t *s = (const uint32_t *)src;
-    for (size_t i = 0; i < n_dwords; i++) d[i] = s[i];
-}
-static inline void fast_set_dwords(void *dest, uint32_t val, size_t n_dwords) {
-    uint32_t *d = (uint32_t *)dest;
-    for (size_t i = 0; i < n_dwords; i++) d[i] = val;
-}
-#endif
+static void flush_full_canvas_to_vram(void);
 
 static void save_mouse_under(int x, int y, int w, int h) {
     under_x = x; under_y = y; under_w = w; under_h = h;
@@ -389,7 +410,7 @@ void os_draw_mouse_cursor(void) {
     prev_mouse_y = mouse->y;
 }
 
-/* --- RENDERIZACAO ULTRARRAPIDA EM RAM (ZERO LEITURAS DE VRAM) --- */
+/* --- RENDERIZAÇÃO INSTANTÂNEA EM RAM VIA 128-BIT SSE STREAM --- */
 static void draw_char_to_canvas(char c, int cx, int cy, uint32_t fg) {
     if (c < 32 || c > 126) c = '?';
     const uint8_t *glyph = kgfx_font8x8[c - 32];
@@ -403,11 +424,11 @@ static void draw_char_to_canvas(char c, int cx, int cy, uint32_t fg) {
     }
 }
 
-static void blit_char_to_vram(int cx, int cy) {
+static void blit_char_to_vram_128(int cx, int cy) {
     for (int r = 0; r < TERM_CHAR_H; r++) {
         uint32_t *vram = &os_fb.buffer[(TERM_Y_START + cy + r) * os_fb.pitch + (TERM_X_START + cx)];
         const uint32_t *ram = &term_canvas[(cy + r) * TERM_WIDTH + cx];
-        fast_copy_dwords(vram, ram, TERM_CHAR_W);
+        sse_stream_vram(vram, ram, (TERM_CHAR_W * 4) / 16 + 1);
     }
 }
 
@@ -415,21 +436,21 @@ static void flush_full_canvas_to_vram(void) {
     for (int y = 0; y < TERM_HEIGHT; y++) {
         uint32_t *vram = &os_fb.buffer[(TERM_Y_START + y) * os_fb.pitch + TERM_X_START];
         const uint32_t *ram = &term_canvas[y * TERM_WIDTH];
-        fast_copy_dwords(vram, ram, TERM_WIDTH);
+        sse_stream_vram(vram, ram, (TERM_WIDTH * 4) / 16); // 180 quads de 128 bits por scanline
     }
 }
 
-static void terminal_scroll_up(void) {
-    // 1. Move todas as linhas de pixels em RAM (Cache da CPU = 0.000005 segundos)
+static void terminal_scroll_ram(void) {
     size_t words_to_move = TERM_WIDTH * (TERM_HEIGHT - TERM_CHAR_H);
     kmemmove(term_canvas, term_canvas + (TERM_CHAR_H * TERM_WIDTH), words_to_move * sizeof(uint32_t));
 
-    // 2. Limpa apenas a nova linha do rodapé em RAM
     size_t bottom_words = TERM_WIDTH * TERM_CHAR_H;
-    fast_set_dwords(term_canvas + words_to_move, KGFX_BLACK, bottom_words);
+    kmemset(term_canvas + words_to_move, 0, bottom_words * sizeof(uint32_t));
 
-    // 3. Envia o bloco inteiro para a VRAM (Apenas Escrita Sequencial Pura = 0.5 ms)
-    flush_full_canvas_to_vram();
+    // Se estiver digitando interativamente, atualiza a tela
+    if (!term_batch_mode) {
+        flush_full_canvas_to_vram();
+    }
 }
 
 static void os_putchar(char c) {
@@ -437,7 +458,7 @@ static void os_putchar(char c) {
         term_col = 0;
         term_row++;
         if (term_row >= TERM_ROWS) {
-            terminal_scroll_up();
+            terminal_scroll_ram();
             term_row = TERM_ROWS - 1;
         }
         return;
@@ -449,16 +470,18 @@ static void os_putchar(char c) {
             int cx = term_col * TERM_CHAR_W;
             int cy = term_row * TERM_CHAR_H;
             for (int r = 0; r < TERM_CHAR_H; r++) {
-                fast_set_dwords(&term_canvas[(cy + r) * TERM_WIDTH + cx], KGFX_BLACK, TERM_CHAR_W);
+                kmemset(&term_canvas[(cy + r) * TERM_WIDTH + cx], 0, TERM_CHAR_W * sizeof(uint32_t));
             }
-            blit_char_to_vram(cx, cy);
+            if (!term_batch_mode) {
+                blit_char_to_vram_128(cx, cy);
+            }
         }
         return;
     }
 
     if ((unsigned char)c >= 32) {
         if (term_row >= TERM_ROWS) {
-            terminal_scroll_up();
+            terminal_scroll_ram();
             term_row = TERM_ROWS - 1;
         }
 
@@ -466,14 +489,17 @@ static void os_putchar(char c) {
         int cy = term_row * TERM_CHAR_H;
 
         draw_char_to_canvas(c, cx, cy, KGFX_WHITE);
-        blit_char_to_vram(cx, cy);
+
+        if (!term_batch_mode) {
+            blit_char_to_vram_128(cx, cy);
+        }
 
         term_col++;
         if (term_col >= TERM_COLS) {
             term_col = 0;
             term_row++;
             if (term_row >= TERM_ROWS) {
-                terminal_scroll_up();
+                terminal_scroll_ram();
                 term_row = TERM_ROWS - 1;
             }
         }
@@ -493,7 +519,7 @@ static void draw_gui_desktop(void) {
     kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.6", KGFX_WHITE, KGFX_BLUE, 2);
 
     kgfx_draw_rect_alpha(&os_fb, 20, 60, os_fb.width - 40, 45, kgfx_argb(180, 24, 24, 37));
-    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] para o CLI! Clique nos botoes abaixo para Jogos e Apps!", KGFX_YELLOW, 0);
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] para o CLI! SSE 128-bit Ativo com Performance Maxima!", KGFX_YELLOW, 0);
 
     kgfx_draw_filled_circle(&os_fb, os_fb.width - 80, 180, 35, KGFX_PURPLE);
     kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, os_fb.width - 110, 150, os_fb.width - 70, 220, KGFX_GREEN, 1);
@@ -506,7 +532,7 @@ static void draw_gui_desktop(void) {
     } else {
         kgfx_draw_string(&os_fb, 30, 170, "  * ATA Storage Mode  : Standalone RAM Mode", KGFX_CYAN, 0);
     }
-    kgfx_draw_string(&os_fb, 30, 190, "  * Multi-User Engine : User Authentication Active (whoami / su / adduser)", KGFX_CYAN, 0);
+    kgfx_draw_string(&os_fb, 30, 190, "  * SIMD Engine       : FPU + SSE (128-bit Vector Streaming Stores)", KGFX_GREEN, 0);
     kgfx_draw_string(&os_fb, 30, 210, "  * Sound & Timer     : PC Speaker Audio (0x61) + PIT 100Hz Active", KGFX_CYAN, 0);
 
     draw_demo_button(0);
@@ -522,7 +548,7 @@ static void draw_gui_desktop(void) {
     }
 }
 
-/* --- SNAKE COM RENDERIZACAO DELTA --- */
+/* --- SNAKE COM RENDERIZAÇÃO DELTA --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
@@ -624,7 +650,7 @@ static void update_snake_game(void) {
     }
 }
 
-/* --- KEDIT & TOP --- */
+/* --- KEDIT, TOP & BMP --- */
 static void render_editor(void) {
     mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_BLACK);
@@ -780,11 +806,15 @@ static void execute_cli_command(const char *cmd) {
     while (*cmd == ' ') cmd++;
     if (*cmd == '\0') {
         print_prompt();
+        flush_full_canvas_to_vram();
         return;
     }
 
+    // Ativa modo batch: todos os prints da execução são processados em RAM em microssegundos
+    term_batch_mode = 1;
+
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
-        kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema]\n");
+        kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema (SSE 128-bit Fast)]\n");
         kprintf("    • calc_gui           : Abrir Calculadora Grafica Flutuante\n");
         kprintf("    • view <arquivo.bmp> : Visualizador de Imagens BMP\n");
         kprintf("    • snake / game       : Jogo retro Snake (Cobrinha)\n");
@@ -809,6 +839,7 @@ static void execute_cli_command(const char *cmd) {
         kprintf("    • clear              : Limpar tela\n");
         kprintf("    • exit               : Voltar ao modo GUI\n");
     } else if (kstrcmp(cmd, "calc_gui") == 0 || kstrcmp(cmd, "calc") == 0) {
+        term_batch_mode = 0;
         os_mode = 5;
         render_calc_window();
         return;
@@ -817,11 +848,13 @@ static void execute_cli_command(const char *cmd) {
         while (*t == ' ') t++;
         if (*t) {
             resolve_path(t, view_bmp_path, sizeof(view_bmp_path));
+            term_batch_mode = 0;
             os_mode = 6;
             render_bmp_view();
         }
         return;
     } else if (kstrcmp(cmd, "snake") == 0 || kstrcmp(cmd, "game") == 0) {
+        term_batch_mode = 0;
         start_snake_game();
         return;
     } else if (kstrncmp(cmd, "beep", 4) == 0) {
@@ -840,9 +873,11 @@ static void execute_cli_command(const char *cmd) {
     } else if (kstrncmp(cmd, "edit ", 5) == 0 || kstrncmp(cmd, "nano ", 5) == 0) {
         const char *t = cmd + 5;
         while (*t == ' ') t++;
+        term_batch_mode = 0;
         if (*t) open_editor_file(t);
         return;
     } else if (kstrcmp(cmd, "top") == 0) {
+        term_batch_mode = 0;
         os_mode = 3;
         render_top();
         return;
@@ -1066,6 +1101,7 @@ static void execute_cli_command(const char *cmd) {
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         kprintf("[Interactive Kernel CLI Terminal - Press ESC to Return to GUI]\n\n");
     } else if (kstrcmp(cmd, "exit") == 0) {
+        term_batch_mode = 0;
         os_mode = 0;
         mouse_under_saved = 0;
         draw_gui_desktop();
@@ -1075,6 +1111,10 @@ static void execute_cli_command(const char *cmd) {
     }
 
     print_prompt();
+
+    // Desativa modo batch e envia tudo de uma única vez via 128-bit SSE para a tela
+    term_batch_mode = 0;
+    flush_full_canvas_to_vram();
 }
 
 void os_handle_keypress(char c) {
@@ -1105,13 +1145,13 @@ void os_handle_keypress(char c) {
                 edit_buf[edit_len] = '\0';
                 render_editor();
             }
-        } else if (c == 19) { // Ctrl+S
+        } else if (c == 19) {
             kvfs_write(edit_filepath, edit_buf, edit_len);
             kdiskfs_save_file(edit_filepath, edit_buf, edit_len, KVFS_TYPE_FILE, 0644);
             kstrncpy(edit_status_msg, "[SALVO NO DISCO!]", sizeof(edit_status_msg) - 1);
             ksound_beep(1200, 6, pit_get_ticks());
             render_editor();
-        } else if (c == 17 || c == 27) { // Ctrl+Q ou ESC
+        } else if (c == 17 || c == 27) {
             os_mode = 1;
             term_col = 0;
             term_row = 0;
@@ -1120,6 +1160,7 @@ void os_handle_keypress(char c) {
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
             kprintf("\n[Exited KEDIT - Returned to Shell]\n\n");
             print_prompt();
+            flush_full_canvas_to_vram();
         } else if ((unsigned char)c >= 32 && edit_len < EDIT_BUF_SZ - 1) {
             edit_buf[edit_len++] = c;
             edit_buf[edit_len] = '\0';
@@ -1135,6 +1176,7 @@ void os_handle_keypress(char c) {
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
             kprintf("\n[Exited top - Returned to Shell]\n\n");
             print_prompt();
+            flush_full_canvas_to_vram();
         }
     } else if (os_mode == 4) {
         if (c == 'w' || c == 'W') {
@@ -1176,6 +1218,7 @@ void os_handle_keypress(char c) {
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
             kprintf("\n[Exited BMP View - Returned to Shell]\n\n");
             print_prompt();
+            flush_full_canvas_to_vram();
         }
     }
 }
@@ -1201,6 +1244,7 @@ void os_toggle_cli_mode(void) {
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         kprintf("[Interactive Kernel CLI Terminal Active - Type 'help' or press ESC to exit]\n\n");
         print_prompt();
+        flush_full_canvas_to_vram();
     } else {
         draw_gui_desktop();
     }
@@ -1208,6 +1252,9 @@ void os_toggle_cli_mode(void) {
 
 void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     if (magic != MULTIBOOT_BOOTLOADER_MAGIC || !mb_info) return;
+
+    // 1. Ativação de FPU e SSE 128-bit
+    enable_fpu_sse();
 
     uint32_t *fb_ptr = (uint32_t *)(uintptr_t)mb_info->framebuffer_addr;
     uint32_t width = mb_info->framebuffer_width ? mb_info->framebuffer_width : 800;

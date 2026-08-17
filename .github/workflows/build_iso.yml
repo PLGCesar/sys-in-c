@@ -22,24 +22,30 @@ jobs:
 
       - name: Build Kernel Binary and ISO
         run: |
+          # Flags de otimização máxima O3 + SSE 128-bit para kernel x86
+          CFLAGS="-m32 -ffreestanding -fno-pic -fno-pie -fno-stack-protector -O3 -msse -msse2 -mfpmath=sse -Wall -Wextra"
+
           # Compila Assembly
           gcc -m32 -c test_os/boot.s -o test_os/boot.o
           gcc -m32 -c test_os/interrupts.s -o test_os/interrupts.o
 
-          # Compila C sem PIC/PIE
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kmem.c -o test_os/kmem.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kfixed.c -o test_os/kfixed.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kprintf.c -o test_os/kprintf.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kgfx.c -o test_os/kgfx.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kstring.c -o test_os/kstring.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c freestanding/kvfs.c -o test_os/kvfs.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/gdt.c -o test_os/gdt.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/idt.c -o test_os/idt.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/ps2.c -o test_os/ps2.o
-          gcc -m32 -ffreestanding -fno-pic -fno-pie -O2 -Wall -Wextra -c test_os/kernel.c -o test_os/kernel.o
+          # Compila C com -O3 e SSE 128-bit
+          gcc $CFLAGS -c freestanding/kmem.c -o test_os/kmem.o
+          gcc $CFLAGS -c freestanding/kfixed.c -o test_os/kfixed.o
+          gcc $CFLAGS -c freestanding/kprintf.c -o test_os/kprintf.o
+          gcc $CFLAGS -c freestanding/kgfx.c -o test_os/kgfx.o
+          gcc $CFLAGS -c freestanding/kstring.c -o test_os/kstring.o
+          gcc $CFLAGS -c freestanding/kvfs.c -o test_os/kvfs.o
+          gcc $CFLAGS -c test_os/gdt.c -o test_os/gdt.o
+          gcc $CFLAGS -c test_os/idt.c -o test_os/idt.o
+          gcc $CFLAGS -c test_os/ps2.c -o test_os/ps2.o
+          gcc $CFLAGS -c test_os/kernel.c -o test_os/kernel.o
 
-          # Linka o Binário
-          gcc -m32 -ffreestanding -fno-pie -nostdlib -T test_os/linker.ld test_os/boot.o test_os/interrupts.o test_os/kmem.o test_os/kfixed.o test_os/kprintf.o test_os/kgfx.o test_os/kstring.o test_os/kvfs.o test_os/gdt.o test_os/idt.o test_os/ps2.o test_os/kernel.o -o test_os/myos.bin -lgcc
+          # Linka o Binário Multiboot sem PIE e sem erros de relocação
+          gcc -m32 -ffreestanding -fno-pie -no-pie -nostdlib -Wl,-z,notext -T test_os/linker.ld \
+              test_os/boot.o test_os/interrupts.o test_os/kmem.o test_os/kfixed.o test_os/kprintf.o \
+              test_os/kgfx.o test_os/kstring.o test_os/kvfs.o test_os/gdt.o test_os/idt.o \
+              test_os/ps2.o test_os/kernel.o -o test_os/myos.bin -lgcc
 
           # Verifica Multiboot1
           grub-file --is-x86-multiboot test_os/myos.bin
