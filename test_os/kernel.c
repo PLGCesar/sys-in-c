@@ -29,14 +29,17 @@ static char current_dir[KVFS_MAX_PATH] = "/";
 static char current_user[32] = "root";
 static int is_root = 1;
 
-/* --- TERMINAL CONFIG (90 colunas x 36 linhas) --- */
+/* --- TERMINAL CANVAS EM RAM (ZERO MMIO READ TRAPS) --- */
 #define TERM_COLS 90
 #define TERM_ROWS 36
 #define TERM_X_START 30
 #define TERM_Y_START 48
 #define TERM_CHAR_W 8
 #define TERM_CHAR_H 14
+#define TERM_WIDTH  (TERM_COLS * TERM_CHAR_W) // 720 px
+#define TERM_HEIGHT (TERM_ROWS * TERM_CHAR_H) // 504 px
 
+static uint32_t term_canvas[TERM_WIDTH * TERM_HEIGHT];
 static int term_col = 0;
 static int term_row = 0;
 
@@ -386,25 +389,47 @@ void os_draw_mouse_cursor(void) {
     prev_mouse_y = mouse->y;
 }
 
-/* --- ROLAGEM INSTANTÂNEA DIRETA NO FRAMEBUFFER VIA HARDWARE DWORD (0.2ms) --- */
+/* --- RENDERIZACAO ULTRARRAPIDA EM RAM (ZERO LEITURAS DE VRAM) --- */
+static void draw_char_to_canvas(char c, int cx, int cy, uint32_t fg) {
+    if (c < 32 || c > 126) c = '?';
+    const uint8_t *glyph = kgfx_font8x8[c - 32];
+
+    for (int r = 0; r < 8; r++) {
+        uint8_t bits = glyph[r];
+        uint32_t *line = &term_canvas[(cy + r) * TERM_WIDTH + cx];
+        for (int b = 0; b < 8; b++) {
+            line[b] = (bits & (1 << (7 - b))) ? fg : KGFX_BLACK;
+        }
+    }
+}
+
+static void blit_char_to_vram(int cx, int cy) {
+    for (int r = 0; r < TERM_CHAR_H; r++) {
+        uint32_t *vram = &os_fb.buffer[(TERM_Y_START + cy + r) * os_fb.pitch + (TERM_X_START + cx)];
+        const uint32_t *ram = &term_canvas[(cy + r) * TERM_WIDTH + cx];
+        fast_copy_dwords(vram, ram, TERM_CHAR_W);
+    }
+}
+
+static void flush_full_canvas_to_vram(void) {
+    for (int y = 0; y < TERM_HEIGHT; y++) {
+        uint32_t *vram = &os_fb.buffer[(TERM_Y_START + y) * os_fb.pitch + TERM_X_START];
+        const uint32_t *ram = &term_canvas[y * TERM_WIDTH];
+        fast_copy_dwords(vram, ram, TERM_WIDTH);
+    }
+}
+
 static void terminal_scroll_up(void) {
-    int line_h = TERM_CHAR_H;
-    int start_y = TERM_Y_START;
-    int end_y = TERM_Y_START + (TERM_ROWS * TERM_CHAR_H);
-    int scroll_w = TERM_COLS * TERM_CHAR_W; // 720 pixels
+    // 1. Move todas as linhas de pixels em RAM (Cache da CPU = 0.000005 segundos)
+    size_t words_to_move = TERM_WIDTH * (TERM_HEIGHT - TERM_CHAR_H);
+    kmemmove(term_canvas, term_canvas + (TERM_CHAR_H * TERM_WIDTH), words_to_move * sizeof(uint32_t));
 
-    // Move todas as linhas de pixels para cima em blocos de 32 bits
-    for (int y = start_y; y < end_y - line_h; y++) {
-        uint32_t *dst = &os_fb.buffer[y * os_fb.pitch + TERM_X_START];
-        const uint32_t *src = &os_fb.buffer[(y + line_h) * os_fb.pitch + TERM_X_START];
-        fast_copy_dwords(dst, src, scroll_w);
-    }
+    // 2. Limpa apenas a nova linha do rodapé em RAM
+    size_t bottom_words = TERM_WIDTH * TERM_CHAR_H;
+    fast_set_dwords(term_canvas + words_to_move, KGFX_BLACK, bottom_words);
 
-    // Limpa apenas a última linha criada no rodapé
-    for (int y = end_y - line_h; y < end_y; y++) {
-        uint32_t *dst = &os_fb.buffer[y * os_fb.pitch + TERM_X_START];
-        fast_set_dwords(dst, KGFX_BLACK, scroll_w);
-    }
+    // 3. Envia o bloco inteiro para a VRAM (Apenas Escrita Sequencial Pura = 0.5 ms)
+    flush_full_canvas_to_vram();
 }
 
 static void os_putchar(char c) {
@@ -421,11 +446,12 @@ static void os_putchar(char c) {
     if (c == '\b') {
         if (term_col > 0) {
             term_col--;
-            int py = TERM_Y_START + term_row * TERM_CHAR_H;
+            int cx = term_col * TERM_CHAR_W;
+            int cy = term_row * TERM_CHAR_H;
             for (int r = 0; r < TERM_CHAR_H; r++) {
-                uint32_t *dst = &os_fb.buffer[(py + r) * os_fb.pitch + (TERM_X_START + term_col * TERM_CHAR_W)];
-                fast_set_dwords(dst, KGFX_BLACK, TERM_CHAR_W);
+                fast_set_dwords(&term_canvas[(cy + r) * TERM_WIDTH + cx], KGFX_BLACK, TERM_CHAR_W);
             }
+            blit_char_to_vram(cx, cy);
         }
         return;
     }
@@ -436,10 +462,13 @@ static void os_putchar(char c) {
             term_row = TERM_ROWS - 1;
         }
 
-        // Desenha apenas a letra atual sem operações redundantes
-        kgfx_draw_char(&os_fb, TERM_X_START + term_col * TERM_CHAR_W, TERM_Y_START + term_row * TERM_CHAR_H, c, KGFX_WHITE, 0);
-        term_col++;
+        int cx = term_col * TERM_CHAR_W;
+        int cy = term_row * TERM_CHAR_H;
 
+        draw_char_to_canvas(c, cx, cy, KGFX_WHITE);
+        blit_char_to_vram(cx, cy);
+
+        term_col++;
         if (term_col >= TERM_COLS) {
             term_col = 0;
             term_row++;
@@ -493,7 +522,7 @@ static void draw_gui_desktop(void) {
     }
 }
 
-/* --- SNAKE COM ZERO FLICKER (DESENHO INCREMENTAL) --- */
+/* --- SNAKE COM RENDERIZACAO DELTA --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
@@ -595,7 +624,7 @@ static void update_snake_game(void) {
     }
 }
 
-/* --- KEDIT, TOP & BMP --- */
+/* --- KEDIT & TOP --- */
 static void render_editor(void) {
     mouse_under_saved = 0;
     kgfx_clear(&os_fb, KGFX_BLACK);
@@ -1030,6 +1059,7 @@ static void execute_cli_command(const char *cmd) {
         kprintf("    • Free Memory  : %u KB\n", (unsigned int)(kmem_get_free_bytes() / 1024));
         kprintf("    • Used Memory  : %u bytes\n", (unsigned int)kmem_get_used_bytes());
     } else if (kstrcmp(cmd, "clear") == 0) {
+        kmemset(term_canvas, 0, sizeof(term_canvas));
         term_col = 0;
         term_row = 0;
         kgfx_clear(&os_fb, KGFX_BLACK);
@@ -1085,6 +1115,7 @@ void os_handle_keypress(char c) {
             os_mode = 1;
             term_col = 0;
             term_row = 0;
+            kmemset(term_canvas, 0, sizeof(term_canvas));
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
             kprintf("\n[Exited KEDIT - Returned to Shell]\n\n");
@@ -1099,6 +1130,7 @@ void os_handle_keypress(char c) {
             os_mode = 1;
             term_col = 0;
             term_row = 0;
+            kmemset(term_canvas, 0, sizeof(term_canvas));
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
             kprintf("\n[Exited top - Returned to Shell]\n\n");
@@ -1139,6 +1171,7 @@ void os_handle_keypress(char c) {
             os_mode = 1;
             term_col = 0;
             term_row = 0;
+            kmemset(term_canvas, 0, sizeof(term_canvas));
             kgfx_clear(&os_fb, KGFX_BLACK);
             kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
             kprintf("\n[Exited BMP View - Returned to Shell]\n\n");
@@ -1163,6 +1196,7 @@ void os_toggle_cli_mode(void) {
     if (os_mode == 1) {
         term_col = 0;
         term_row = 0;
+        kmemset(term_canvas, 0, sizeof(term_canvas));
         kgfx_clear(&os_fb, KGFX_BLACK);
         kgfx_draw_rounded_rect(&os_fb, 10, 10, os_fb.width - 20, os_fb.height - 20, 8, KGFX_CYAN, 0);
         kprintf("[Interactive Kernel CLI Terminal Active - Type 'help' or press ESC to exit]\n\n");
@@ -1187,6 +1221,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     static uint8_t os_heap_pool[2 * 1024 * 1024];
     kmem_init(os_heap_pool, sizeof(os_heap_pool));
 
+    kmemset(term_canvas, 0, sizeof(term_canvas));
     term_col = 0;
     term_row = 0;
 

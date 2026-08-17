@@ -15,7 +15,7 @@ static inline void kgfx_outb(uint16_t port, uint8_t val) { (void)port; (void)val
 static inline uint8_t kgfx_inb(uint16_t port) { (void)port; return 0; }
 #endif
 
-static const uint8_t kgfx_font8x8[95][8] = {
+const uint8_t kgfx_font8x8[95][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* Space */
     {0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00}, /* ! */
     {0x36,0x36,0x00,0x00,0x00,0x00,0x00,0x00}, /* " */
@@ -293,7 +293,6 @@ void kgfx_draw_triangle(kgfx_fb_t *fb, int x0, int y0, int x1, int y1, int x2, i
     }
 }
 
-/* Renderização direta acelerada de fontes */
 void kgfx_draw_char(kgfx_fb_t *fb, int x, int y, char c, uint32_t fg, uint32_t bg) {
     if (c < 32 || c > 126) c = '?';
     const uint8_t *glyph = kgfx_font8x8[c - 32];

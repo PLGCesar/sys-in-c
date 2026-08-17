@@ -4,15 +4,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Framebuffer descriptor */
 typedef struct {
-    uint32_t *buffer;   /* Pixel memory array (ARGB32) */
-    uint32_t width;     /* Screen width in pixels */
-    uint32_t height;    /* Screen height in pixels */
-    uint32_t pitch;     /* Pixels per scanline */
+    uint32_t *buffer;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
 } kgfx_fb_t;
 
-/* Standard 32-bit ARGB color definitions */
 #define KGFX_BLACK     0xFF000000
 #define KGFX_WHITE     0xFFFFFFFF
 #define KGFX_RED       0xFFFF0000
@@ -59,16 +57,15 @@ typedef struct {
     kgfx_cursor_type_t type;
 } kgfx_mouse_t;
 
-/* Framebuffer Functions */
+extern const uint8_t kgfx_font8x8[95][8];
+
 void kgfx_init(kgfx_fb_t *fb, uint32_t *buffer, uint32_t width, uint32_t height);
 void kgfx_clear(kgfx_fb_t *fb, uint32_t color);
 
-/* Alpha Blending */
 uint32_t kgfx_blend_colors(uint32_t bg, uint32_t fg);
 void kgfx_draw_pixel_alpha(kgfx_fb_t *fb, int x, int y, uint32_t color);
 void kgfx_draw_rect_alpha(kgfx_fb_t *fb, int x, int y, int w, int h, uint32_t color);
 
-/* Graphics Primitives */
 void kgfx_draw_pixel(kgfx_fb_t *fb, int x, int y, uint32_t color);
 void kgfx_draw_line(kgfx_fb_t *fb, int x0, int y0, int x1, int y1, uint32_t color);
 void kgfx_draw_rect(kgfx_fb_t *fb, int x, int y, int w, int h, uint32_t color, int fill);
@@ -77,27 +74,22 @@ void kgfx_draw_circle(kgfx_fb_t *fb, int cx, int cy, int r, uint32_t color);
 void kgfx_draw_filled_circle(kgfx_fb_t *fb, int cx, int cy, int r, uint32_t color);
 void kgfx_draw_triangle(kgfx_fb_t *fb, int x0, int y0, int x1, int y1, int x2, int y2, uint32_t color, int fill);
 
-/* Text Rendering */
 void kgfx_draw_char(kgfx_fb_t *fb, int x, int y, char c, uint32_t fg, uint32_t bg);
 void kgfx_draw_string(kgfx_fb_t *fb, int x, int y, const char *str, uint32_t fg, uint32_t bg);
 void kgfx_draw_char_scaled(kgfx_fb_t *fb, int x, int y, char c, uint32_t fg, uint32_t bg, int scale);
 void kgfx_draw_string_scaled(kgfx_fb_t *fb, int x, int y, const char *str, uint32_t fg, uint32_t bg, int scale);
 
-/* Bitmap Blitting */
 void kgfx_blit(kgfx_fb_t *dest, int dx, int dy, const uint32_t *src_buf, int sw, int sh, uint32_t chroma_key);
 
-/* Double Buffering */
 void kgfx_double_buffer_init(kgfx_double_buffer_t *db, uint32_t *front, uint32_t *back, uint32_t w, uint32_t h);
 void kgfx_swap_buffers(kgfx_double_buffer_t *db);
 void kgfx_dirty_clear(kgfx_dirty_list_t *list);
 void kgfx_add_dirty_rect(kgfx_dirty_list_t *list, int x, int y, int w, int h);
 void kgfx_flush_dirty(kgfx_double_buffer_t *db, kgfx_dirty_list_t *list);
 
-/* Mouse & Hit Testing */
 void kgfx_draw_cursor(kgfx_fb_t *fb, const kgfx_mouse_t *mouse);
 int kgfx_rect_contains(const kgfx_rect_t *rect, int x, int y);
 
-/* --- VGA Mode 03h Driver (Text Mode 80x25 at 0xB8000) --- */
 typedef struct {
     uint8_t character;
     uint8_t attribute;
@@ -107,7 +99,6 @@ void kgfx_vga3h_putc(int col, int row, char c, uint8_t fg, uint8_t bg);
 void kgfx_vga3h_print(int col, int row, const char *str, uint8_t fg, uint8_t bg);
 void kgfx_vga3h_clear(uint8_t bg);
 
-/* --- UART Serial Port Driver (COM1 0x3F8) --- */
 #define COM1_PORT 0x3F8
 void kgfx_serial_init(void);
 void kgfx_serial_putc(char c);
