@@ -422,7 +422,7 @@ static void blit_char_to_vram_128(int cx, int cy) {
     for (int r = 0; r < TERM_CHAR_H; r++) {
         uint32_t *vram = &os_fb.buffer[(TERM_Y_START + cy + r) * os_fb.pitch + (TERM_X_START + cx)];
         const uint32_t *ram = &term_canvas[(cy + r) * TERM_WIDTH + cx];
-        sse_stream_vram(vram, ram, (TERM_CHAR_W * 4) / 16 + 1);
+        sse_stream_vram(vram, ram, 2); // 8 pixels * 4 bytes = 32 bytes = 2 blocos de 16 bytes
     }
 }
 
@@ -541,7 +541,6 @@ static void draw_gui_desktop(void) {
     }
 }
 
-/* --- SNAKE --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
