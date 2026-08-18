@@ -25,31 +25,30 @@ static inline void unlock_heap(void) {
     if (kmem_unlock_hook) kmem_unlock_hook();
 }
 
-/* Cópia acelerada em 128-bit / 32-bit */
+/* Cópia acelerada de memória via instrução nativa de hardware */
 void *kmemcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
 
 #if defined(__x86_64__) || defined(__i386__)
-    // Cópia em blocos de 16 bytes (128 bits)
-    while (n >= 16) {
+    if (n >= 4) {
+        size_t dwords = n / 4;
         __asm__ __volatile__ (
-            "movups (%1), %%xmm0\n"
-            "movups %%xmm0, (%0)\n"
-            : : "r"(d), "r"(s) : "memory", "xmm0"
+            "cld\n"
+            "rep movsl\n"
+            : "+D"(d), "+S"(s), "+c"(dwords)
+            : : "memory"
         );
-        d += 16;
-        s += 16;
-        n -= 16;
+        n %= 4;
     }
-#endif
-
+#else
     while (n >= 4 && (((uintptr_t)d & 3) == 0) && (((uintptr_t)s & 3) == 0)) {
         *(uint32_t *)d = *(const uint32_t *)s;
         d += 4;
         s += 4;
         n -= 4;
     }
+#endif
 
     while (n--) {
         *d++ = *s++;
@@ -57,16 +56,32 @@ void *kmemcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+/* Preenchimento acelerado de memória */
 void *kmemset(void *s, int c, size_t n) {
     uint8_t *p = (uint8_t *)s;
     uint8_t byte_val = (uint8_t)c;
-    uint32_t val32 = ((uint32_t)byte_val << 24) | ((uint32_t)byte_val << 16) | ((uint32_t)byte_val << 8) | byte_val;
 
+#if defined(__x86_64__) || defined(__i386__)
+    if (n >= 4) {
+        uint32_t val32 = ((uint32_t)byte_val << 24) | ((uint32_t)byte_val << 16) | ((uint32_t)byte_val << 8) | byte_val;
+        size_t dwords = n / 4;
+        __asm__ __volatile__ (
+            "cld\n"
+            "rep stosl\n"
+            : "+D"(p), "+c"(dwords)
+            : "a"(val32)
+            : "memory"
+        );
+        n %= 4;
+    }
+#else
+    uint32_t val32 = ((uint32_t)byte_val << 24) | ((uint32_t)byte_val << 16) | ((uint32_t)byte_val << 8) | byte_val;
     while (n >= 4 && (((uintptr_t)p & 3) == 0)) {
         *(uint32_t *)p = val32;
         p += 4;
         n -= 4;
     }
+#endif
 
     while (n--) {
         *p++ = byte_val;

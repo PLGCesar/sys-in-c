@@ -71,43 +71,29 @@ static int mouse_under_saved = 0;
 static int under_x = 0, under_y = 0, under_w = 0, under_h = 0;
 static int prev_mouse_x = 400, prev_mouse_y = 300;
 
-/* --- ATIVAÇÃO DE FPU E SSE --- */
-static void enable_fpu_sse(void) {
 #if defined(__x86_64__) || defined(__i386__)
-    uint32_t cr0;
-    __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
-    cr0 &= ~(1 << 2); // Limpa EM
-    cr0 |= (1 << 1);  // Seta MP
-    cr0 |= (1 << 5);  // Seta NE
-    __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0));
-
-    uint32_t cr4;
-    __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
-    cr4 |= (1 << 9);  // OSFXSR
-    cr4 |= (1 << 10); // OSXMMEXCPT
-    __asm__ __volatile__("mov %0, %%cr4" : : "r"(cr4));
-
-    __asm__ __volatile__("fninit");
-#endif
+static inline void fast_copy_dwords(void *dest, const void *src, size_t n_dwords) {
+    __asm__ __volatile__ ("cld; rep movsl"
+                          : "+D"(dest), "+S"(src), "+c"(n_dwords)
+                          : : "memory");
 }
-
-static inline void sse_stream_vram(void *dest, const void *src, size_t num_quads_16b) {
-#if defined(__x86_64__) || defined(__i386__)
-    uint8_t *d = (uint8_t *)dest;
-    const uint8_t *s = (const uint8_t *)src;
-    while (num_quads_16b--) {
-        __asm__ __volatile__ (
-            "movups (%1), %%xmm0\n"
-            "movups %%xmm0, (%0)\n"
-            : : "r"(d), "r"(s) : "memory", "xmm0"
-        );
-        d += 16;
-        s += 16;
-    }
+static inline void fast_set_dwords(void *dest, uint32_t val, size_t n_dwords) {
+    __asm__ __volatile__ ("cld; rep stosl"
+                          : "+D"(dest), "+c"(n_dwords)
+                          : "a"(val)
+                          : "memory");
+}
 #else
-    kmemcpy(dest, src, num_quads_16b * 16);
-#endif
+static inline void fast_copy_dwords(void *dest, const void *src, size_t n_dwords) {
+    uint32_t *d = (uint32_t *)dest;
+    const uint32_t *s = (const uint32_t *)src;
+    for (size_t i = 0; i < n_dwords; i++) d[i] = s[i];
 }
+static inline void fast_set_dwords(void *dest, uint32_t val, size_t n_dwords) {
+    uint32_t *d = (uint32_t *)dest;
+    for (size_t i = 0; i < n_dwords; i++) d[i] = val;
+}
+#endif
 
 /* --- CALCULADORA GUI --- */
 #define CALC_WIN_X 240
@@ -418,11 +404,11 @@ static void draw_char_to_canvas(char c, int cx, int cy, uint32_t fg) {
     }
 }
 
-static void blit_char_to_vram_128(int cx, int cy) {
+static void blit_char_to_vram(int cx, int cy) {
     for (int r = 0; r < TERM_CHAR_H; r++) {
         uint32_t *vram = &os_fb.buffer[(TERM_Y_START + cy + r) * os_fb.pitch + (TERM_X_START + cx)];
         const uint32_t *ram = &term_canvas[(cy + r) * TERM_WIDTH + cx];
-        sse_stream_vram(vram, ram, 2); // 8 pixels * 4 bytes = 32 bytes = 2 blocos de 16 bytes
+        fast_copy_dwords(vram, ram, TERM_CHAR_W);
     }
 }
 
@@ -430,7 +416,7 @@ static void flush_full_canvas_to_vram(void) {
     for (int y = 0; y < TERM_HEIGHT; y++) {
         uint32_t *vram = &os_fb.buffer[(TERM_Y_START + y) * os_fb.pitch + TERM_X_START];
         const uint32_t *ram = &term_canvas[y * TERM_WIDTH];
-        sse_stream_vram(vram, ram, (TERM_WIDTH * 4) / 16);
+        fast_copy_dwords(vram, ram, TERM_WIDTH);
     }
 }
 
@@ -466,7 +452,7 @@ static void os_putchar(char c) {
                 kmemset(&term_canvas[(cy + r) * TERM_WIDTH + cx], 0, TERM_CHAR_W * sizeof(uint32_t));
             }
             if (!term_batch_mode) {
-                blit_char_to_vram_128(cx, cy);
+                blit_char_to_vram(cx, cy);
             }
         }
         return;
@@ -484,7 +470,7 @@ static void os_putchar(char c) {
         draw_char_to_canvas(c, cx, cy, KGFX_WHITE);
 
         if (!term_batch_mode) {
-            blit_char_to_vram_128(cx, cy);
+            blit_char_to_vram(cx, cy);
         }
 
         term_col++;
@@ -512,7 +498,7 @@ static void draw_gui_desktop(void) {
     kgfx_draw_string_scaled(&os_fb, 20, 20, "utils-in-c OS v2.6", KGFX_WHITE, KGFX_BLUE, 2);
 
     kgfx_draw_rect_alpha(&os_fb, 20, 60, os_fb.width - 40, 45, kgfx_argb(180, 24, 24, 37));
-    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] para o CLI! SSE 128-bit Ativo com Performance Maxima!", KGFX_YELLOW, 0);
+    kgfx_draw_string(&os_fb, 30, 75, "Pressione [ESC] para o CLI! Botoes abaixo para Apps e Jogos!", KGFX_YELLOW, 0);
 
     kgfx_draw_filled_circle(&os_fb, os_fb.width - 80, 180, 35, KGFX_PURPLE);
     kgfx_draw_triangle(&os_fb, os_fb.width - 150, 220, os_fb.width - 110, 150, os_fb.width - 70, 220, KGFX_GREEN, 1);
@@ -525,7 +511,7 @@ static void draw_gui_desktop(void) {
     } else {
         kgfx_draw_string(&os_fb, 30, 170, "  * ATA Storage Mode  : Standalone RAM Mode", KGFX_CYAN, 0);
     }
-    kgfx_draw_string(&os_fb, 30, 190, "  * SIMD Engine       : FPU + SSE (128-bit Vector Streaming Stores)", KGFX_GREEN, 0);
+    kgfx_draw_string(&os_fb, 30, 190, "  * Multi-User Engine : User Authentication Active (whoami / su / adduser)", KGFX_CYAN, 0);
     kgfx_draw_string(&os_fb, 30, 210, "  * Sound & Timer     : PC Speaker Audio (0x61) + PIT 100Hz Active", KGFX_CYAN, 0);
 
     draw_demo_button(0);
@@ -541,6 +527,7 @@ static void draw_gui_desktop(void) {
     }
 }
 
+/* --- SNAKE --- */
 static void spawn_snake_food(void) {
     uint32_t seed = pit_get_ticks();
     snake_food.x = (int)(seed % (SNAKE_GRID_W - 2)) + 1;
@@ -805,7 +792,7 @@ static void execute_cli_command(const char *cmd) {
     term_batch_mode = 1;
 
     if (kstrcmp(cmd, "help") == 0 || kstrcmp(cmd, "?") == 0) {
-        kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema (SSE 128-bit Fast)]\n");
+        kprintf("  [utils-in-c OS v2.6 - Comandos do Sistema (Fast Native)]\n");
         kprintf("    • calc_gui           : Abrir Calculadora Grafica Flutuante\n");
         kprintf("    • view <arquivo.bmp> : Visualizador de Imagens BMP\n");
         kprintf("    • snake / game       : Jogo retro Snake (Cobrinha)\n");
@@ -1242,8 +1229,6 @@ void os_toggle_cli_mode(void) {
 
 void kernel_main(uint32_t magic, multiboot_info_t *mb_info) {
     if (magic != MULTIBOOT_BOOTLOADER_MAGIC || !mb_info) return;
-
-    enable_fpu_sse();
 
     uint32_t *fb_ptr = (uint32_t *)(uintptr_t)mb_info->framebuffer_addr;
     uint32_t width = mb_info->framebuffer_width ? mb_info->framebuffer_width : 800;
