@@ -4,7 +4,7 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip
+TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest
 
 all: $(LIB_IPC) $(TOOLS)
 
@@ -77,8 +77,17 @@ utils-help: src/utils-help/utils-help.c
 netclip: src/netclip/netclip.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/netclip/netclip.c -o netclip $(LDFLAGS_IPC)
 
-free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/main_test.c freestanding/kcalc.c
-	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/main_test.c -o freestanding_test
+snc: src/snc/snc.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/snc/snc.c -o snc $(LDFLAGS_IPC)
+
+jsonview: src/jsonview/jsonview.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/jsonview/jsonview.c -o jsonview $(LDFLAGS_IPC)
+
+speedtest: src/speedtest/speedtest.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/speedtest/speedtest.c -o speedtest $(LDFLAGS_IPC)
+
+free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/kbmp.c freestanding/main_test.c freestanding/kcalc.c
+	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/kbmp.c freestanding/main_test.c -o freestanding_test
 	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kcalc.c -o kcalc
 
 install: all
@@ -89,7 +98,13 @@ install: all
 		install -m 755 $$tool $(DESTDIR)$(PREFIX)/bin/$$tool; \
 	done
 
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_IPC)
+	for tool in $(TOOLS); do \
+		rm -f $(DESTDIR)$(PREFIX)/bin/$$tool; \
+	done
+
 clean:
 	rm -f $(TOOLS) $(LIB_IPC) freestanding_test kcalc
 
-.PHONY: all install clean free
+.PHONY: all install uninstall clean free
