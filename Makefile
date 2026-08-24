@@ -4,13 +4,19 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest
+SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit
+LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem
 
-all: $(LIB_IPC) $(TOOLS)
+INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat df peekmem
+ALL_TOOLS = $(SRC_TOOLS) $(LOW_TOOLS)
 
-$(LIB_IPC): src/libutilipc/utilipc.c
+all: $(LIB_IPC) $(ALL_TOOLS)
+
+# --- BIBLIOTECA IPC APRIMORADA ---
+$(LIB_IPC): src/libutilipc/utilipc.c src/libutilipc/utilipc.h
 	$(CC) $(CFLAGS) -shared src/libutilipc/utilipc.c -o $(LIB_IPC) -lpthread
 
+# --- FERRAMENTAS SRC ---
 calc: src/calc/calc.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/calc/calc.c -o calc $(LDFLAGS_IPC) -lm
 
@@ -86,25 +92,73 @@ jsonview: src/jsonview/jsonview.c $(LIB_IPC)
 speedtest: src/speedtest/speedtest.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/speedtest/speedtest.c -o speedtest $(LDFLAGS_IPC)
 
+httpget: src/httpget/httpget.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/httpget/httpget.c -o httpget $(LDFLAGS_IPC)
+
+tedit: src/tedit/tedit.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/tedit/tedit.c -o tedit $(LDFLAGS_IPC)
+
+# --- FERRAMENTAS LOW-UTILS ---
+chmod: low-utils/chmod.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/chmod.c -o chmod
+
+cat: low-utils/cat.c low-utils/low.h
+	$(CC) -Wall -Wextra -O3 low-utils/cat.c -o cat
+
+rmd: low-utils/rmd.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/rmd.c -o rmd
+
+cp: low-utils/cp.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/cp.c -o cp
+
+xxd: low-utils/xxd.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/xxd.c -o xxd
+
+ln: low-utils/ln.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/ln.c -o ln
+
+stat: low-utils/stat.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/stat.c -o stat
+
+ls: low-utils/ls.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/ls.c -o ls
+
+df: low-utils/df.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/df.c -o df
+
+peekmem: low-utils/peekmem.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/peekmem.c -o peekmem
+
+dummy_target: low-utils/dummy_target.c
+	$(CC) $(CFLAGS) low-utils/dummy_target.c -o dummy_target
+
+# --- FREESTANDING / OS ---
 free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/kbmp.c freestanding/main_test.c freestanding/kcalc.c
 	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/kbmp.c freestanding/main_test.c -o freestanding_test
 	$(CC) $(CFLAGS) -ffreestanding freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kcalc.c -o kcalc
 
+# --- INSTALL / UNINSTALL / CLEAN ---
 install: all
 	install -d $(DESTDIR)$(PREFIX)/lib
 	install -m 755 $(LIB_IPC) $(DESTDIR)$(PREFIX)/lib/$(LIB_IPC)
 	install -d $(DESTDIR)$(PREFIX)/bin
-	for tool in $(TOOLS); do \
+	for tool in $(SRC_TOOLS); do \
 		install -m 755 $$tool $(DESTDIR)$(PREFIX)/bin/$$tool; \
+	done
+	for ltool in $(INSTALL_LOW_TOOLS); do \
+		install -m 755 $$ltool $(DESTDIR)$(PREFIX)/bin/$$ltool; \
 	done
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_IPC)
-	for tool in $(TOOLS); do \
+	for tool in $(SRC_TOOLS); do \
 		rm -f $(DESTDIR)$(PREFIX)/bin/$$tool; \
+	done
+	for ltool in $(INSTALL_LOW_TOOLS); do \
+		rm -f $(DESTDIR)$(PREFIX)/bin/$$ltool; \
 	done
 
 clean:
-	rm -f $(TOOLS) $(LIB_IPC) freestanding_test kcalc
+	rm -f $(ALL_TOOLS) $(LIB_IPC) freestanding_test kcalc dummy_target
 
 .PHONY: all install uninstall clean free

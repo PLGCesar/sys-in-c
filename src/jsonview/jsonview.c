@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <unistd.h>
 #include "../libutilipc/utilipc.h"
 
 #define COLOR_RESET   "\033[0m"
@@ -11,6 +12,21 @@
 #define COLOR_BOOL    "\033[1;35m" // Magenta
 #define COLOR_NULL    "\033[0;35m" // Magenta escuro
 #define COLOR_PUNCT   "\033[1;37m" // Branco
+
+static void print_help(void) {
+    printf("======================\n");
+    printf("[ jsonview - JSON Syntax Highlighter & Formatter ]\n");
+    printf("======================\n");
+    printf("Usage:\n");
+    printf("  jsonview '<json_ou_shorthand>'\n");
+    printf("  jsonview arquivo.json\n");
+    printf("  cat dados.json | jsonview\n\n");
+    printf("Exemplos:\n");
+    printf("  jsonview 'usuarios: \"1,4,5\"'\n");
+    printf("  jsonview 'nome: \"Carlos\", idade: 25, ativo: true'\n");
+    printf("  jsonview '{\"status\": \"ok\", \"code\": 200}'\n");
+    printf("======================\n");
+}
 
 static void print_indent(int indent) {
     for (int i = 0; i < indent * 2; i++) putchar(' ');
@@ -157,6 +173,12 @@ int main(int argc, char *argv[]) {
     char *input_buffer = NULL;
 
     if (argc >= 2) {
+        if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+            print_help();
+            utilipc_close();
+            return 0;
+        }
+
         FILE *fp = fopen(argv[1], "rb");
         if (fp) {
             fseek(fp, 0, SEEK_END);
@@ -184,6 +206,14 @@ int main(int argc, char *argv[]) {
             }
         }
     } else {
+        // Se está num terminal interativo e NÃO recebeu pipes (|), não bloqueia no getchar()
+        if (isatty(STDIN_FILENO)) {
+            print_help();
+            utilipc_close();
+            return 0;
+        }
+
+        // Lê do STDIN apenas se vier de um Pipe ou Redirecionamento
         size_t cap = 4096;
         input_buffer = malloc(cap);
         size_t n = 0;
@@ -204,14 +234,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (!input_buffer || strlen(input_buffer) == 0) {
-        printf("Usage:\n");
-        printf("  jsonview '<json_ou_shorthand>'\n");
-        printf("  jsonview arquivo.json\n");
-        printf("  cat dados.json | jsonview\n\n");
-        printf("Exemplos:\n");
-        printf("  jsonview 'usuários: \"1,4,5\"'\n");
-        printf("  jsonview 'nome: \"Carlos\", idade: 25, ativo: true'\n");
-        printf("  jsonview '{\"status\": \"ok\", \"code\": 200}'\n");
+        print_help();
         if (input_buffer) free(input_buffer);
         utilipc_close();
         return 0;
