@@ -4,15 +4,17 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit
-LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem
+SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp
+LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic
 
-INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat df peekmem
+# 'ls' omitido de INSTALL_LOW_TOOLS por segurança
+INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat df peekmem pv ps kill whoami ltop ping magic
+
 ALL_TOOLS = $(SRC_TOOLS) $(LOW_TOOLS)
 
 all: $(LIB_IPC) $(ALL_TOOLS)
 
-# --- BIBLIOTECA IPC APRIMORADA ---
+# --- BIBLIOTECA IPC ---
 $(LIB_IPC): src/libutilipc/utilipc.c src/libutilipc/utilipc.h
 	$(CC) $(CFLAGS) -shared src/libutilipc/utilipc.c -o $(LIB_IPC) -lpthread
 
@@ -98,6 +100,33 @@ httpget: src/httpget/httpget.c $(LIB_IPC)
 tedit: src/tedit/tedit.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/tedit/tedit.c -o tedit $(LDFLAGS_IPC)
 
+netscan: src/netscan/netscan.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/netscan/netscan.c -o netscan $(LDFLAGS_IPC)
+
+dnsquery: src/dnsquery/dnsquery.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/dnsquery/dnsquery.c -o dnsquery $(LDFLAGS_IPC)
+
+diskbench: src/diskbench/diskbench.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/diskbench/diskbench.c -o diskbench $(LDFLAGS_IPC)
+
+krypt: src/krypt/krypt.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/krypt/krypt.c -o krypt $(LDFLAGS_IPC)
+
+rawcat: src/rawcat/rawcat.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/rawcat/rawcat.c -o rawcat $(LDFLAGS_IPC)
+
+hwcaps: src/hwcaps/hwcaps.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/hwcaps/hwcaps.c -o hwcaps $(LDFLAGS_IPC)
+
+matrix: src/matrix/matrix.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/matrix/matrix.c -o matrix $(LDFLAGS_IPC)
+
+pwr: src/pwr/pwr.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/pwr/pwr.c -o pwr $(LDFLAGS_IPC) -lm
+
+sntp: src/sntp/sntp.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/sntp/sntp.c -o sntp $(LDFLAGS_IPC) -lm
+
 # --- FERRAMENTAS LOW-UTILS ---
 chmod: low-utils/chmod.c low-utils/low.h
 	$(CC) $(CFLAGS) low-utils/chmod.c -o chmod
@@ -131,6 +160,27 @@ peekmem: low-utils/peekmem.c low-utils/low.h
 
 dummy_target: low-utils/dummy_target.c
 	$(CC) $(CFLAGS) low-utils/dummy_target.c -o dummy_target
+
+pv: low-utils/pv.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/pv.c -o pv
+
+ps: low-utils/ps.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/ps.c -o ps
+
+kill: low-utils/kill.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/kill.c -o kill
+
+whoami: low-utils/whoami.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/whoami.c -o whoami
+
+ltop: low-utils/ltop.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/ltop.c -o ltop
+
+ping: low-utils/ping.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/ping.c -o ping -lm
+
+magic: low-utils/magic.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/magic.c -o magic
 
 # --- FREESTANDING / OS ---
 free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/kbmp.c freestanding/main_test.c freestanding/kcalc.c

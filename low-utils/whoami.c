@@ -90,7 +90,7 @@ static void get_proc_status_val(pid_t pid, const char *key, char *out, size_t ou
 
 static void print_human_card(void) {
     uid_t ruid = getuid(), euid = geteuid();
-    gid_t rgid = getgid(), egid = getegid();
+    gid_t egid = getegid();
 
     struct passwd *pw = getpwuid(euid);
     const char *username = pw ? pw->pw_name : getenv("USER");
@@ -202,17 +202,15 @@ static void print_ultra_output(pid_t target_pid) {
     get_proc_status_val(pid, "Threads", proc_threads, sizeof(proc_threads));
     get_proc_status_val(pid, "Seccomp", seccomp, sizeof(seccomp));
 
-    struct rlimit r_nofile, r_stack, r_as;
+    struct rlimit r_nofile, r_stack;
     getrlimit(RLIMIT_NOFILE, &r_nofile);
     getrlimit(RLIMIT_STACK, &r_stack);
-    getrlimit(RLIMIT_AS, &r_as);
 
     printf("\n%s╔════════════════════════════════════════════════════════════════════════════╗%s\n", LOW_COLOR_BORDER, LOW_COLOR_RESET);
     printf("%s║%s  %s[ whoami - ULTRA OUTPUT DIAGNOSTIC & SECURITY AUDIT ]%s                  %s║%s\n",
            LOW_COLOR_BORDER, LOW_COLOR_RESET, LOW_COLOR_LABEL, LOW_COLOR_RESET, LOW_COLOR_BORDER, LOW_COLOR_RESET);
     printf("%s╚════════════════════════════════════════════════════════════════════════════╝%s\n\n", LOW_COLOR_BORDER, LOW_COLOR_RESET);
 
-    // 1. Identidade e Credenciais
     printf("%s┌── [1] IDENTIDADE & CREDENCIAIS POSIX ──────────────────────────────────────┐%s\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
     printf("  %s• Username       :%s %s%s%s (GECOS: %s)\n", LOW_COLOR_PROJECT, LOW_COLOR_RESET, COLOR_USER, username, COLOR_RESET, pw ? pw->pw_gecos : "N/A");
     printf("  %s• UIDs (R/E/S/FS):%s Real=%u | Effective=%u | Saved=%u | FS=%u\n", LOW_COLOR_PROJECT, LOW_COLOR_RESET, ruid, euid, suid, fsuid);
@@ -235,7 +233,6 @@ static void print_ultra_output(pid_t target_pid) {
     }
     printf("%s└────────────────────────────────────────────────────────────────────────────┘%s\n\n", LOW_COLOR_MUTED, LOW_COLOR_RESET);
 
-    // 2. Contexto de Processo
     printf("%s┌── [2] CONTEXTO DO PROCESSO (PID: %d) ──────────────────────────────────────┐%s\n", LOW_COLOR_TAG, pid, LOW_COLOR_RESET);
     printf("  %s• Hierarquia PIDs:%s PID: %s%d%s | Pai (PPID): %d | Session (SID): %d | PGID: %d\n",
            LOW_COLOR_PROJECT, LOW_COLOR_RESET, COLOR_VAL, pid, COLOR_RESET, ppid, sid, pgid);
@@ -247,7 +244,6 @@ static void print_ultra_output(pid_t target_pid) {
            LOW_COLOR_PROJECT, LOW_COLOR_RESET, COLOR_VAL, open_fds, COLOR_RESET, pid);
     printf("%s└────────────────────────────────────────────────────────────────────────────┘%s\n\n", LOW_COLOR_MUTED, LOW_COLOR_RESET);
 
-    // 3. Memória Virtual e RAM
     printf("%s┌── [3] CONSUMO DE MEMÓRIA VIRTUAL & RAM (VFS /proc) ────────────────────────┐%s\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
     printf("  %s• RAM Real (RSS) :%s %s%s%s (Memoria fisica alocada)\n", LOW_COLOR_PROJECT, LOW_COLOR_RESET, COLOR_OK, vm_rss, COLOR_RESET);
     printf("  %s• Memoria Virtual:%s %s (Pico: %s)\n", LOW_COLOR_PROJECT, LOW_COLOR_RESET, vm_size, vm_peak);
@@ -256,7 +252,6 @@ static void print_ultra_output(pid_t target_pid) {
     printf("  %s• Codigo Execut. :%s %s (VmExe binario mapeado)\n", LOW_COLOR_PROJECT, LOW_COLOR_RESET, vm_exe);
     printf("%s└────────────────────────────────────────────────────────────────────────────┘%s\n\n", LOW_COLOR_MUTED, LOW_COLOR_RESET);
 
-    // 4. Terminal TTY & Geometria
     printf("%s┌── [4] TERMINAL TTY & SUBSISTEMA DE CONTROLE ──────────────────────────────┐%s\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
     printf("  %s• Dispositivo TTY:%s %s%s%s\n", LOW_COLOR_PROJECT, LOW_COLOR_RESET, COLOR_PATH, tty, COLOR_RESET);
     printf("  %s• Geometria Janela:%s %s%d Colunas x %d Linhas%s (%d x %d pixels)\n",
@@ -265,7 +260,6 @@ static void print_ultra_output(pid_t target_pid) {
            LOW_COLOR_PROJECT, LOW_COLOR_RESET, fg_pgid, (fg_pgid == pgid) ? "[Foreground Ativo]" : "[Background]");
     printf("%s└────────────────────────────────────────────────────────────────────────────┘%s\n\n", LOW_COLOR_MUTED, LOW_COLOR_RESET);
 
-    // 5. Limites de Recursos do Kernel
     printf("%s┌── [5] LIMITES DO KERNEL (rlimit) & SEGURANÇA ─────────────────────────────┐%s\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
     printf("  %s• Limite Max FDs :%s Soft: %lu | Hard: %lu (RLIMIT_NOFILE)\n",
            LOW_COLOR_PROJECT, LOW_COLOR_RESET, (unsigned long)r_nofile.rlim_cur, (unsigned long)r_nofile.rlim_max);
