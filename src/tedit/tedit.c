@@ -20,7 +20,22 @@
 #define COLOR_TEXT    "\033[1;37m"
 #define COLOR_MUTED   "\033[0;90m"
 
-// Sistema de Temas
+// Cores de Sintaxe
+#define SYN_KEYWORD   "\033[1;36m" // Ciano Brilhante
+#define SYN_STRING    "\033[1;32m" // Verde
+#define SYN_NUMBER    "\033[1;33m" // Amarelo
+#define SYN_COMMENT   "\033[0;90m" // Cinza Escuro
+#define SYN_MATCH     "\033[1;30;43m" // Fundo Amarelo Fluorescente
+
+typedef enum {
+    LANG_PLAIN = 0,
+    LANG_C,
+    LANG_JS,
+    LANG_PY,
+    LANG_SH,
+    LANG_HTML
+} file_lang_t;
+
 typedef struct {
     const char *name;
     const char *border;
@@ -48,8 +63,13 @@ static int cur_col = 0;
 static int scroll_y = 0;
 static int is_modified = 0;
 static char notify_status[128] = "";
+static file_lang_t current_lang = LANG_PLAIN;
 
-// Servidor Web Embutido (Thread em Background)
+// Busca (Ctrl + F)
+static char search_query[64] = "";
+static int search_active = 0;
+
+// Servidor Web Embutido
 static pthread_t web_server_thread;
 static volatile int web_server_running = 0;
 static int web_server_port = 8080;
@@ -58,6 +78,26 @@ static int web_server_sock = -1;
 static void enable_raw_mode(void);
 static void disable_raw_mode(void);
 static int save_file(void);
+
+static void detect_language(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) { current_lang = LANG_PLAIN; return; }
+    if (strcasecmp(dot, ".c") == 0 || strcasecmp(dot, ".h") == 0 || strcasecmp(dot, ".cpp") == 0) current_lang = LANG_C;
+    else if (strcasecmp(dot, ".js") == 0 || strcasecmp(dot, ".json") == 0 || strcasecmp(dot, ".ts") == 0) current_lang = LANG_JS;
+    else if (strcasecmp(dot, ".py") == 0) current_lang = LANG_PY;
+    else if (strcasecmp(dot, ".sh") == 0 || strcasecmp(dot, ".bash") == 0) current_lang = LANG_SH;
+    else if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0 || strcasecmp(dot, ".xml") == 0) current_lang = LANG_HTML;
+    else current_lang = LANG_PLAIN;
+}
+
+static const char *get_lang_name(void) {
+    if (current_lang == LANG_C) return "C/C++";
+    if (current_lang == LANG_JS) return "JS/JSON";
+    if (current_lang == LANG_PY) return "PYTHON";
+    if (current_lang == LANG_SH) return "SHELL";
+    if (current_lang == LANG_HTML) return "HTML";
+    return "TEXT";
+}
 
 static void stop_web_server(void) {
     if (web_server_running) {
@@ -110,6 +150,7 @@ static void get_window_size(int *rows, int *cols) {
 
 static void load_file(const char *path) {
     strncpy(filename, path, sizeof(filename) - 1);
+    detect_language(filename);
     FILE *fp = fopen(path, "r");
     line_count = 0;
 
@@ -151,6 +192,335 @@ static int save_file(void) {
     return 0;
 }
 
+// Duplicar e Deletar Linha
+static void duplicate_current_line(void) {
+    if (line_count >= MAX_LINES - 1) {
+        snprintf(notify_status, sizeof(notify_status), "[✖ Limite de linhas atingido]");
+        return;
+    }
+    for (int i = line_count; i > cur_line + 1; i--) {
+        strcpy(lines[i], lines[i - 1]);
+    }
+    strcpy(lines[cur_line + 1], lines[cur_line]);
+    line_count++;
+    cur_line++;
+    is_modified = 1;
+    snprintf(notify_status, sizeof(notify_status), "[✔ Linha duplicada]");
+}
+
+static void delete_current_line(void) {
+    if (line_count == 1) {
+        lines[0][0] = '\0';
+        cur_col = 0;
+    } else {
+        for (int i = cur_line; i < line_count - 1; i++) {
+            strcpy(lines[i], lines[i + 1]);
+        }
+        line_count--;
+        if (cur_line >= line_count) cur_line = line_count - 1;
+    }
+    size_t l = strlen(lines[cur_line]);
+    if (cur_col > (int)l) cur_col = l;
+    is_modified = 1;
+    snprintf(notify_status, sizeof(notify_status), "[✔ Linha deletada]");
+}
+
+// Busca (Ctrl + F)
+static void find_next_match(const char *query) {
+    if (!query || !*query) return;
+    size_t qlen = strlen(query);
+
+    int start_l = cur_line;
+    int start_c = cur_col + 1;
+
+    for (int step = 0; step < line_count; step++) {
+        int l = (start_l + step) % line_count;
+        const char *line = lines[l];
+        int c_start = (step == 0) ? start_c : 0;
+
+        if (c_start < (int)strlen(line)) {
+            char *found = strcasestr(line + c_start, query);
+            if (found) {
+                cur_line = l;
+                cur_col = found - line;
+                snprintf(notify_status, sizeof(notify_status), "[✔ Linha %d:%d]", cur_line + 1, cur_col + 1);
+                search_active = 1;
+                return;
+            }
+        }
+    }
+    snprintf(notify_status, sizeof(notify_status), "[✖ Nao encontrado]");
+}
+
+// --- MODAL DE ESTATÍSTICAS (ALT + I) ---
+static void show_file_info_modal(void) {
+    int term_rows, term_cols;
+    get_window_size(&term_rows, &term_cols);
+    const tedit_theme_t *th = &themes[current_theme_idx];
+
+    size_t total_words = 0;
+    size_t total_chars = 0;
+
+    for (int i = 0; i < line_count; i++) {
+        size_t l = strlen(lines[i]);
+        total_chars += l + 1;
+        int in_word = 0;
+        for (size_t j = 0; j < l; j++) {
+            if (isspace((unsigned char)lines[i][j])) {
+                in_word = 0;
+            } else if (!in_word) {
+                in_word = 1;
+                total_words++;
+            }
+        }
+    }
+
+    int modal_w = 64;
+    int modal_h = 13;
+    int start_x = (term_cols - modal_w) / 2;
+    int start_y = (term_rows - modal_h) / 2;
+
+    printf("\033[?25l");
+
+    printf("\033[%d;%dH%s╭", start_y, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("╮%s\r\n", COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s%s  📊 ESTATÍSTICAS E INFORMAÇÕES DO ARQUIVO%-*s%s%s│%s\r\n",
+           start_y + 1, start_x, th->border, COLOR_RESET, th->header, modal_w - 46, "", COLOR_RESET, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s├", start_y + 2, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("┤%s\r\n", COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s  • Arquivo     : %s%-42.42s%s %s│%s\r\n", start_y + 3, start_x, th->border, COLOR_RESET, "\033[1;36m", filename, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  • Linguagem   : %-44s %s│%s\r\n", start_y + 4, start_x, th->border, COLOR_RESET, get_lang_name(), th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  • Status      : %-44s %s│%s\r\n", start_y + 5, start_x, th->border, COLOR_RESET, is_modified ? "\033[1;33mModificado (*)\033[0m" : "\033[1;32mSalvo no disco\033[0m", th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  • Total Linhas: %s%-44d%s %s│%s\r\n", start_y + 6, start_x, th->border, COLOR_RESET, "\033[1;33m", line_count, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  • Palavras    : %s%-44zu%s %s│%s\r\n", start_y + 7, start_x, th->border, COLOR_RESET, "\033[1;33m", total_words, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  • Caracteres  : %-44zu %s│%s\r\n", start_y + 8, start_x, th->border, COLOR_RESET, total_chars, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  • Tamanho Est.: %s%.2f KB (%zu bytes)%s%*s %s│%s\r\n", start_y + 9, start_x, th->border, COLOR_RESET, "\033[1;32m", (double)total_chars / 1024.0, total_chars, COLOR_RESET, (int)(25 - snprintf(NULL, 0, "%.2f KB (%zu bytes)", (double)total_chars / 1024.0, total_chars)), "", th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  • Tema Atual  : %-44s %s│%s\r\n", start_y + 10, start_x, th->border, COLOR_RESET, th->name, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s├", start_y + 11, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("┤%s\r\n", COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s  %s[ Pressione qualquer tecla para fechar este painel ]%s    %s│%s\r\n",
+           start_y + 12, start_x, th->border, COLOR_RESET, "\033[0;90m", COLOR_RESET, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s╰", start_y + 13, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("╯%s", COLOR_RESET);
+    fflush(stdout);
+
+    char dummy;
+    read(STDIN_FILENO, &dummy, 1);
+}
+
+// --- MODAL DE AJUDA & GUIA DE ATALHOS (ALT + O) ---
+static void show_help_modal(void) {
+    int term_rows, term_cols;
+    get_window_size(&term_rows, &term_cols);
+    const tedit_theme_t *th = &themes[current_theme_idx];
+
+    int modal_w = 68;
+    int modal_h = 19;
+    int start_x = (term_cols - modal_w) / 2;
+    int start_y = (term_rows - modal_h) / 2;
+
+    printf("\033[?25l");
+
+    printf("\033[%d;%dH%s╭", start_y, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("╮%s\r\n", COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s%s  📖 GUIA DE ATALHOS & COMANDOS DO TEDIT%-*s%s%s│%s\r\n",
+           start_y + 1, start_x, th->border, COLOR_RESET, th->header, modal_w - 44, "", COLOR_RESET, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s├", start_y + 2, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("┤%s\r\n", COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s  \033[1;36m[ARQUIVO & SISTEMA]\033[0m                                          %s│%s\r\n", start_y + 3, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mCtrl + X\033[0m : Salvar e fechar editor  \033[1;33mCtrl + S\033[0m : Salvar no disco  %s│%s\r\n", start_y + 4, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mCtrl + Q\033[0m : Sair sem salvar         \033[1;33mAlt + S \033[0m : Mini-Shell/Bash  %s│%s\r\n", start_y + 5, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mAlt + H \033[0m : Servidor Web Live (8080)                            %s│%s\r\n", start_y + 6, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s                                                                  %s│%s\r\n", start_y + 7, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  \033[1;36m[EDIÇÃO & PRODUTIVIDADE]\033[0m                                         %s│%s\r\n", start_y + 8, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mCtrl + K\033[0m : Copiar tudo p/ Clipboard \033[1;33mColar  \033[0m : Modo Bloco Rápido %s│%s\r\n", start_y + 9, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mCtrl + D\033[0m : Duplicar linha atual    \033[1;33mAlt + D \033[0m : Deletar linha    %s│%s\r\n", start_y + 10, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s                                                                  %s│%s\r\n", start_y + 11, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s  \033[1;36m[BUSCA, NAVEGAÇÃO & PAINÉIS]\033[0m                                     %s│%s\r\n", start_y + 12, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mCtrl + F\033[0m : Buscar termo / Próximo  \033[1;33mCtrl + G\033[0m : Ir para Linha    %s│%s\r\n", start_y + 13, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mCtrl + T\033[0m : Alternar tema de cores  \033[1;33mAlt + I \033[0m : Estatísticas     %s│%s\r\n", start_y + 14, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+    printf("\033[%d;%dH%s│%s    \033[1;33mAlt + O \033[0m : Abrir este guia de ajuda                            %s│%s\r\n", start_y + 15, start_x, th->border, COLOR_RESET, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s├", start_y + 16, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("┤%s\r\n", COLOR_RESET);
+
+    printf("\033[%d;%dH%s│%s  %s[ Pressione qualquer tecla para fechar este guia ]%s       %s│%s\r\n",
+           start_y + 17, start_x, th->border, COLOR_RESET, "\033[0;90m", COLOR_RESET, th->border, COLOR_RESET);
+
+    printf("\033[%d;%dH%s╰", start_y + 18, start_x, th->border);
+    for (int i = 0; i < modal_w - 2; i++) printf("─");
+    printf("╯%s", COLOR_RESET);
+    fflush(stdout);
+
+    char dummy;
+    read(STDIN_FILENO, &dummy, 1);
+}
+
+// --- SYNTAX HIGHLIGHTING ---
+static const char *c_keywords[] = {
+    "int", "char", "void", "float", "double", "short", "long", "unsigned", "signed",
+    "struct", "union", "enum", "typedef", "static", "extern", "const", "volatile",
+    "sizeof", "return", "if", "else", "switch", "case", "default", "while", "do",
+    "for", "break", "continue", "goto", "NULL", "include", "define", "ifdef", "ifndef", "endif", NULL
+};
+
+static const char *js_keywords[] = {
+    "function", "let", "var", "const", "return", "if", "else", "for", "while",
+    "switch", "case", "break", "class", "new", "this", "import", "export", "from",
+    "async", "await", "true", "false", "null", "undefined", "try", "catch", NULL
+};
+
+static const char *py_keywords[] = {
+    "def", "class", "return", "if", "elif", "else", "for", "while", "break",
+    "continue", "in", "is", "not", "and", "or", "import", "from", "as",
+    "try", "except", "finally", "with", "self", "None", "True", "False", "pass", NULL
+};
+
+static int is_word_char(char c) {
+    return isalnum((unsigned char)c) || c == '_';
+}
+
+static int matches_kw_list(const char *word, const char **list) {
+    for (int i = 0; list[i] != NULL; i++) {
+        if (strcmp(word, list[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+static void print_syntax_line(const char *line, int inner_w) {
+    size_t len = strlen(line);
+    size_t i = 0;
+    int visible_col = 0;
+    size_t qlen = strlen(search_query);
+
+    while (i < len && visible_col < inner_w) {
+        if (search_active && qlen > 0 && strncasecmp(line + i, search_query, qlen) == 0) {
+            printf("%s", SYN_MATCH);
+            for (size_t k = 0; k < qlen && visible_col < inner_w; k++) {
+                putchar(line[i++]);
+                visible_col++;
+            }
+            printf("%s", COLOR_RESET);
+            continue;
+        }
+
+        if ((current_lang == LANG_C || current_lang == LANG_JS) && line[i] == '/' && line[i+1] == '/') {
+            printf("%s", SYN_COMMENT);
+            while (i < len && visible_col < inner_w) {
+                putchar(line[i++]);
+                visible_col++;
+            }
+            printf("%s", COLOR_RESET);
+            break;
+        }
+
+        if ((current_lang == LANG_PY || current_lang == LANG_SH) && line[i] == '#') {
+            printf("%s", SYN_COMMENT);
+            while (i < len && visible_col < inner_w) {
+                putchar(line[i++]);
+                visible_col++;
+            }
+            printf("%s", COLOR_RESET);
+            break;
+        }
+
+        if (line[i] == '"' || (line[i] == '\'' && current_lang != LANG_PLAIN)) {
+            char quote = line[i];
+            printf("%s", SYN_STRING);
+            putchar(line[i++]);
+            visible_col++;
+
+            while (i < len && line[i] != quote && visible_col < inner_w) {
+                if (line[i] == '\\' && i + 1 < len) {
+                    putchar(line[i++]);
+                    visible_col++;
+                }
+                putchar(line[i++]);
+                visible_col++;
+            }
+            if (i < len && line[i] == quote && visible_col < inner_w) {
+                putchar(line[i++]);
+                visible_col++;
+            }
+            printf("%s", COLOR_RESET);
+            continue;
+        }
+
+        if (current_lang == LANG_HTML && line[i] == '<') {
+            printf("%s", SYN_KEYWORD);
+            while (i < len && line[i] != '>' && visible_col < inner_w) {
+                putchar(line[i++]);
+                visible_col++;
+            }
+            if (i < len && line[i] == '>' && visible_col < inner_w) {
+                putchar(line[i++]);
+                visible_col++;
+            }
+            printf("%s", COLOR_RESET);
+            continue;
+        }
+
+        if (isdigit((unsigned char)line[i]) && (i == 0 || !is_word_char(line[i-1]))) {
+            printf("%s", SYN_NUMBER);
+            while (i < len && (isxdigit((unsigned char)line[i]) || line[i] == 'x' || line[i] == 'X' || line[i] == '.') && visible_col < inner_w) {
+                putchar(line[i++]);
+                visible_col++;
+            }
+            printf("%s", COLOR_RESET);
+            continue;
+        }
+
+        if (is_word_char(line[i]) && (i == 0 || !is_word_char(line[i-1]))) {
+            char word[64];
+            size_t wlen = 0;
+            size_t start_idx = i;
+            while (start_idx + wlen < len && is_word_char(line[start_idx + wlen]) && wlen < sizeof(word) - 1) {
+                word[wlen] = line[start_idx + wlen];
+                wlen++;
+            }
+            word[wlen] = '\0';
+
+            int is_kw = 0;
+            if (current_lang == LANG_C) is_kw = matches_kw_list(word, c_keywords);
+            else if (current_lang == LANG_JS) is_kw = matches_kw_list(word, js_keywords);
+            else if (current_lang == LANG_PY) is_kw = matches_kw_list(word, py_keywords);
+
+            if (is_kw) {
+                printf("%s%s%s", SYN_KEYWORD, word, COLOR_RESET);
+                i += wlen;
+                visible_col += wlen;
+                continue;
+            }
+        }
+
+        putchar(line[i++]);
+        visible_col++;
+    }
+
+    if (visible_col < inner_w) {
+        printf("%*s", inner_w - visible_col, "");
+    }
+}
+
+// MIME Types
 static const char *get_mime(const char *path) {
     const char *dot = strrchr(path, '.');
     if (!dot) return "text/plain";
@@ -464,8 +834,8 @@ static void render_editor(void) {
     printf("╮%s\r\n", COLOR_RESET);
 
     char title[128];
-    snprintf(title, sizeof(title), " tedit: %s%s [%s]%s ",
-             filename, is_modified ? " *" : "", th->name, web_server_running ? " 🌐:8080" : "");
+    snprintf(title, sizeof(title), " tedit: %s%s [%s | %s]%s ",
+             filename, is_modified ? " *" : "", th->name, get_lang_name(), web_server_running ? " 🌐:8080" : "");
     printf("\033[%d;%dH%s│%s%s%-*s%s%s│%s\r\n",
            start_y + 1, start_x,
            th->border, COLOR_RESET,
@@ -477,14 +847,7 @@ static void render_editor(void) {
         printf("\033[%d;%dH%s│%s ", start_y + 2 + row, start_x, th->border, COLOR_RESET);
 
         if (file_line_idx < line_count) {
-            char *line_str = lines[file_line_idx];
-            size_t len = strlen(line_str);
-
-            if ((int)len > inner_w) {
-                printf("%s%.*s%s", th->text, inner_w, line_str, COLOR_RESET);
-            } else {
-                printf("%s%s%s%*s", th->text, line_str, COLOR_RESET, (int)(inner_w - len), "");
-            }
+            print_syntax_line(lines[file_line_idx], inner_w);
         } else {
             printf("%s~%*s%s", COLOR_MUTED, inner_w - 1, "", COLOR_RESET);
         }
@@ -496,7 +859,7 @@ static void render_editor(void) {
     if (strlen(notify_status) > 0) {
         snprintf(status, sizeof(status), " %s (L: %d/%d C: %d) ", notify_status, cur_line + 1, line_count, cur_col + 1);
     } else {
-        snprintf(status, sizeof(status), " ^X Sair | ^S Salvar | ^K Copiar | ^H Web Server | Alt+S Shell ");
+        snprintf(status, sizeof(status), " ^X Sair | ^S Salvar | ^F Busca | ^G Pular | Alt+I Info | Alt+O Ajuda ");
     }
 
     printf("\033[%d;%dH%s│%s%s%-*s%s%s│%s\r\n",
@@ -515,6 +878,115 @@ static void render_editor(void) {
 
     printf("\033[%d;%dH\033[?25h", screen_cursor_y, screen_cursor_x);
     fflush(stdout);
+}
+
+// Prompt para Ir para a Linha (Ctrl + G)
+static void prompt_goto_line(void) {
+    int term_rows, term_cols;
+    get_window_size(&term_rows, &term_cols);
+    const tedit_theme_t *th = &themes[current_theme_idx];
+
+    int box_w = term_cols - 4;
+    if (box_w > 105) box_w = 105;
+    int start_x = (term_cols - box_w) / 2;
+    int start_y = (term_rows - (term_rows - 4)) / 2 + (term_rows - 4) - 1;
+
+    char num_buf[32] = "";
+    size_t idx = 0;
+
+    while (1) {
+        printf("\033[%d;%dH%s│%s%s Ir para Linha (1-%d): %-.*s%s%*s%s│%s",
+               start_y, start_x,
+               th->border, COLOR_RESET,
+               th->footer, line_count, (int)sizeof(num_buf) - 1, num_buf, COLOR_RESET,
+               (int)(box_w - 28 - idx), "",
+               th->border, COLOR_RESET);
+        printf("\033[%d;%dH\033[?25h", start_y, start_x + 25 + (int)idx);
+        fflush(stdout);
+
+        char c;
+        if (read(STDIN_FILENO, &c, 1) <= 0) break;
+
+        if (c == 27 || c == 3) break;
+
+        if (c == '\r' || c == '\n') {
+            if (idx > 0) {
+                int target_l = atoi(num_buf);
+                if (target_l < 1) target_l = 1;
+                if (target_l > line_count) target_l = line_count;
+                cur_line = target_l - 1;
+                cur_col = 0;
+                snprintf(notify_status, sizeof(notify_status), "[✔ Saltou p/ Linha %d]", target_l);
+            }
+            break;
+        }
+
+        if (c == 127 || c == '\b') {
+            if (idx > 0) num_buf[--idx] = '\0';
+            continue;
+        }
+
+        if (isdigit((unsigned char)c) && idx < sizeof(num_buf) - 1) {
+            num_buf[idx++] = c;
+            num_buf[idx] = '\0';
+        }
+    }
+}
+
+// Prompt para Busca (Ctrl + F)
+static void prompt_search(void) {
+    int term_rows, term_cols;
+    get_window_size(&term_rows, &term_cols);
+    const tedit_theme_t *th = &themes[current_theme_idx];
+
+    int box_w = term_cols - 4;
+    if (box_w > 105) box_w = 105;
+    int start_x = (term_cols - box_w) / 2;
+    int start_y = (term_rows - (term_rows - 4)) / 2 + (term_rows - 4) - 1;
+
+    char query[64] = "";
+    size_t qidx = 0;
+
+    while (1) {
+        printf("\033[%d;%dH%s│%s%s Buscar: %-.*s%s%*s%s│%s",
+               start_y, start_x,
+               th->border, COLOR_RESET,
+               th->footer, (int)sizeof(query) - 1, query, COLOR_RESET,
+               (int)(box_w - 12 - qidx), "",
+               th->border, COLOR_RESET);
+        printf("\033[%d;%dH\033[?25h", start_y, start_x + 10 + (int)qidx);
+        fflush(stdout);
+
+        char c;
+        if (read(STDIN_FILENO, &c, 1) <= 0) break;
+
+        if (c == 27 || c == 3) {
+            search_active = 0;
+            search_query[0] = '\0';
+            break;
+        }
+
+        if (c == '\r' || c == '\n') {
+            if (qidx > 0) {
+                strncpy(search_query, query, sizeof(search_query) - 1);
+                find_next_match(search_query);
+            } else {
+                search_active = 0;
+                search_query[0] = '\0';
+            }
+            break;
+        }
+
+        if (c == 127 || c == '\b') {
+            if (qidx > 0) query[--qidx] = '\0';
+            continue;
+        }
+
+        if (isprint((unsigned char)c) && qidx < sizeof(query) - 1) {
+            query[qidx++] = c;
+            query[qidx] = '\0';
+        }
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -552,7 +1024,7 @@ int main(int argc, char *argv[]) {
         read_buffer[bytes_read] = '\0';
         notify_status[0] = '\0';
 
-        // 1. Trata Bracketed Paste e Inserções em Lote
+        // 1. Bracketed Paste
         char *paste_start = strstr(read_buffer, "\033[200~");
         if (paste_start) {
             paste_start += 6;
@@ -569,7 +1041,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        // 2. Atalhos com a tecla ALT (Sequência ESC + Letra)
+        // 2. Atalhos ALT
         if (read_buffer[0] == 27 && bytes_read >= 2) {
             if (read_buffer[1] == 's' || read_buffer[1] == 'S') {
                 run_mini_shell();
@@ -579,19 +1051,53 @@ int main(int argc, char *argv[]) {
                 trigger_live_web_server();
                 continue;
             }
+            if (read_buffer[1] == 'd' || read_buffer[1] == 'D') { // Alt + D (Deletar Linha)
+                delete_current_line();
+                continue;
+            }
+            if (read_buffer[1] == 'i' || read_buffer[1] == 'I') { // Alt + I (File Info Modal)
+                show_file_info_modal();
+                continue;
+            }
+            if (read_buffer[1] == 'o' || read_buffer[1] == 'O') { // Alt + O (Help / Guia de Atalhos)
+                show_help_modal();
+                continue;
+            }
         }
 
         char c = read_buffer[0];
 
-        // Ctrl + X (Salva e Encerra)
+        // Ctrl + X (Salvar e Fechar)
         if (c == 24) {
             save_file();
             break;
         }
 
-        // Ctrl + S (Salva sem sair)
+        // Ctrl + S (Salvar sem sair)
         if (c == 19) {
             save_file();
+            continue;
+        }
+
+        // Ctrl + D (Duplicar Linha)
+        if (c == 4) {
+            duplicate_current_line();
+            continue;
+        }
+
+        // Ctrl + G (Ir para a Linha)
+        if (c == 7) {
+            prompt_goto_line();
+            continue;
+        }
+
+        // Ctrl + F (Buscador)
+        if (c == 6) {
+            if (search_active && strlen(search_query) > 0) {
+                find_next_match(search_query);
+            } else {
+                prompt_search();
+            }
             continue;
         }
 

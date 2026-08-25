@@ -4,11 +4,11 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp
-LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic
+SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp tree
+LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic lsh
 
 # 'ls' omitido de INSTALL_LOW_TOOLS por segurança
-INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat df peekmem pv ps kill whoami ltop ping magic
+INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat df peekmem pv ps kill whoami ltop ping magic lsh
 
 ALL_TOOLS = $(SRC_TOOLS) $(LOW_TOOLS)
 
@@ -127,6 +127,9 @@ pwr: src/pwr/pwr.c $(LIB_IPC)
 sntp: src/sntp/sntp.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/sntp/sntp.c -o sntp $(LDFLAGS_IPC) -lm
 
+tree: src/tree/tree.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/tree/tree.c -o tree $(LDFLAGS_IPC)
+
 # --- FERRAMENTAS LOW-UTILS ---
 chmod: low-utils/chmod.c low-utils/low.h
 	$(CC) $(CFLAGS) low-utils/chmod.c -o chmod
@@ -181,6 +184,9 @@ ping: low-utils/ping.c low-utils/low.h
 
 magic: low-utils/magic.c low-utils/low.h
 	$(CC) $(CFLAGS) low-utils/magic.c -o magic
+
+lsh: low-utils/lsh.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/lsh.c -o lsh
 
 # --- FREESTANDING / OS ---
 free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/kbmp.c freestanding/main_test.c freestanding/kcalc.c
