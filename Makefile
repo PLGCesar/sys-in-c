@@ -4,7 +4,7 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp tree
+SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp tree pythont
 LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic lsh
 
 # 'ls' omitido de INSTALL_LOW_TOOLS por segurança
@@ -129,6 +129,9 @@ sntp: src/sntp/sntp.c $(LIB_IPC)
 
 tree: src/tree/tree.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/tree/tree.c -o tree $(LDFLAGS_IPC)
+
+pythont: src/pythont/pythont.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/pythont/pythont.c -o pythont $(LDFLAGS_IPC)
 
 # --- FERRAMENTAS LOW-UTILS ---
 chmod: low-utils/chmod.c low-utils/low.h
