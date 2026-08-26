@@ -11,6 +11,7 @@
 #include <linux/audit.h>
 #include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "low.h"
 
 #define COLOR_RESET "\033[0m"
@@ -27,11 +28,27 @@
 #define SECCOMP_MODE_FILTER 2
 #endif
 
+#ifndef SECCOMP_RET_KILL_PROCESS
+#define SECCOMP_RET_KILL_PROCESS 0x80000000U
+#endif
+#ifndef SECCOMP_RET_ERRNO
+#define SECCOMP_RET_ERRNO 0x00050000U
+#endif
+#ifndef SECCOMP_RET_DATA
+#define SECCOMP_RET_DATA 0x0000ffffU
+#endif
+#ifndef SECCOMP_RET_ALLOW
+#define SECCOMP_RET_ALLOW 0x7fff0000U
+#endif
+
 #ifndef AUDIT_ARCH_X86_64
 #define AUDIT_ARCH_X86_64 0xc000003e
 #endif
 #ifndef AUDIT_ARCH_AARCH64
 #define AUDIT_ARCH_AARCH64 0xc00000b7
+#endif
+#ifndef AUDIT_ARCH_I386
+#define AUDIT_ARCH_I386 0x40000003
 #endif
 #ifndef AUDIT_ARCH_ARM
 #define AUDIT_ARCH_ARM 0x40000028
@@ -54,13 +71,14 @@ static void print_help(void) {
     printf("  • %s./jail --no-net -- /bin/sh%s                       (Abre uma shell isolada sem internet)\n\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
 }
 
-// Constrói o filtro BPF dinamicamente
 static int setup_seccomp_jail(int no_net, int no_write, int strict) {
     uint32_t arch = 0;
 #if defined(__x86_64__)
     arch = AUDIT_ARCH_X86_64;
 #elif defined(__aarch64__)
     arch = AUDIT_ARCH_AARCH64;
+#elif defined(__i386__)
+    arch = AUDIT_ARCH_I386;
 #elif defined(__arm__)
     arch = AUDIT_ARCH_ARM;
 #endif
@@ -68,15 +86,16 @@ static int setup_seccomp_jail(int no_net, int no_write, int strict) {
     struct sock_filter filter[256];
     int pc = 0;
 
-    // 1. Valida Arquitetura da CPU
-    filter[pc++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (offsetof(struct seccomp_data, arch)));
-    filter[pc++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, arch, 1, 0);
-    filter[pc++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
+    // 1. Valida Arquitetura da CPU se identificada
+    if (arch != 0) {
+        filter[pc++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (offsetof(struct seccomp_data, arch)));
+        filter[pc++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, arch, 1, 0);
+        filter[pc++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS);
+    }
 
     // 2. Carrega o número da Syscall
     filter[pc++] = (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (offsetof(struct seccomp_data, nr)));
 
-    // Macro para bloquear syscall retornando erro EPERM (Operação Não Permitida)
     #define BAN_SYSCALL(sys_nr) do { \
         filter[pc++] = (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (sys_nr), 0, 1); \
         filter[pc++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)); \
@@ -150,7 +169,6 @@ static int setup_seccomp_jail(int no_net, int no_write, int strict) {
 #endif
     }
 
-    // 5. Permite todas as outras syscalls seguras
     filter[pc++] = (struct sock_filter)BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW);
 
     struct sock_fprog prog = {
@@ -158,13 +176,11 @@ static int setup_seccomp_jail(int no_net, int no_write, int strict) {
         .filter = filter,
     };
 
-    // Impede que processos ganhem privilégios com setuid após o isolamento
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
         perror("jail: prctl(PR_SET_NO_NEW_PRIVS)");
         return -1;
     }
 
-    // Injeta o filtro BPF no Kernel para este processo e seus futuros filhos
     if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) < 0) {
         perror("jail: prctl(PR_SET_SECCOMP)");
         return -1;
@@ -202,7 +218,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Se nenhuma flag for especificada, ativa isolamento de rede e escrita por padrão
     if (!no_net && !no_write && !strict) {
         no_net = 1;
         no_write = 1;
@@ -219,7 +234,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Executa o comando solicitado dentro da jaula
     execvp(argv[cmd_idx], &argv[cmd_idx]);
     fprintf(stderr, "jail: erro ao executar comando '%s': %s\n", argv[cmd_idx], strerror(errno));
     return 127;

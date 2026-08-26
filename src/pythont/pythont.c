@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <errno.h>
@@ -140,7 +142,6 @@ static void replace_operators(char *expr) {
     strcpy(expr, tmp);
 }
 
-// Tokenizador Inteligente para print(...) que respeita vírgulas aninhadas em funções e strings
 static void transpile_print(const char *args_str) {
     char fmt_str[512] = "";
     char val_list[2048] = "";
@@ -180,7 +181,7 @@ static void transpile_print(const char *args_str) {
                 } else if (c == ']') {
                     if (bracket_depth > 0) bracket_depth--;
                 } else if (c == ',' && paren_depth == 0 && bracket_depth == 0) {
-                    break; // Vírgula válida do print de nível superior
+                    break;
                 }
             }
             p++;
@@ -197,7 +198,7 @@ static void transpile_print(const char *args_str) {
         char *t = token;
         while (*t == ' ' || *t == '\t') t++;
         size_t tl = strlen(t);
-        while (tl > 0 && (t[tl-1] == ' ' || t[tl-1] == '\t')) t[--tl] = '\0';
+        while (tl > 0 && (t[tl-1] == ' ' || t[tl-1] == '\t')) token[--tl] = '\0';
         if (tl == 0) continue;
 
         if (!first) strcat(fmt_str, " ");
@@ -269,7 +270,6 @@ static void transpile_line(char *line, int indent) {
         pending_block = 0;
     }
 
-    // 1. def funcao(args):
     if (strncmp(line, "def ", 4) == 0 && line[len - 1] == ':') {
         inside_function = 1;
         line[len - 1] = '\0';
@@ -300,7 +300,6 @@ static void transpile_line(char *line, int indent) {
         return;
     }
 
-    // 2. return / break / continue / pass
     if (strncmp(line, "return ", 7) == 0) {
         char expr[512];
         strncpy(expr, line + 7, sizeof(expr) - 1);
@@ -313,7 +312,6 @@ static void transpile_line(char *line, int indent) {
     if (strcmp(line, "continue") == 0) { emit("    continue;\n"); return; }
     if (strcmp(line, "pass") == 0) { emit("    /* pass */;\n"); return; }
 
-    // 3. for var in range(...):
     if (strncmp(line, "for ", 4) == 0 && strstr(line, " in range(") && line[len - 1] == ':') {
         line[len - 1] = '\0';
         char var_name[64] = "";
@@ -345,7 +343,6 @@ static void transpile_line(char *line, int indent) {
         return;
     }
 
-    // 4. while cond:
     if (strncmp(line, "while ", 6) == 0 && line[len - 1] == ':') {
         line[len - 1] = '\0';
         char cond[512];
@@ -357,7 +354,6 @@ static void transpile_line(char *line, int indent) {
         return;
     }
 
-    // 5. if / elif / else:
     if (strncmp(line, "if ", 3) == 0 && line[len - 1] == ':') {
         line[len - 1] = '\0';
         char cond[512];
@@ -387,14 +383,12 @@ static void transpile_line(char *line, int indent) {
         return;
     }
 
-    // 6. print(...)
     if (strncmp(line, "print(", 6) == 0 && line[len - 1] == ')') {
         line[len - 1] = '\0';
         transpile_print(line + 6);
         return;
     }
 
-    // 7. Atribuições Aumentadas: +=, -=, *=, /=, %=
     char *op_eq = NULL;
     if ((op_eq = strstr(line, "+=")) || (op_eq = strstr(line, "-=")) ||
         (op_eq = strstr(line, "*=")) || (op_eq = strstr(line, "/=")) ||
@@ -414,7 +408,6 @@ static void transpile_line(char *line, int indent) {
         return;
     }
 
-    // 8. Atribuição de Listas: nums = [1, 2, 3, 4]
     char *eq = strchr(line, '=');
     if (eq && line[0] != '=' && *(eq + 1) != '=' && *(eq - 1) != '!' && *(eq - 1) != '<' && *(eq - 1) != '>') {
         *eq = '\0';
@@ -433,7 +426,6 @@ static void transpile_line(char *line, int indent) {
         size_t elen = strlen(vexpr_start);
         while (elen > 0 && (vexpr_start[elen-1] == ' ' || vexpr_start[elen-1] == '\t')) vexpr_start[--elen] = '\0';
 
-        // Lista / Array: [10, 20, 30]
         if (vexpr_start[0] == '[' && vexpr_start[elen - 1] == ']') {
             vexpr_start[0] = '{';
             vexpr_start[elen - 1] = '}';
@@ -466,7 +458,6 @@ static void transpile_line(char *line, int indent) {
         return;
     }
 
-    // 9. Chamada genérica / expressão
     replace_operators(line);
     emit("    %s;\n", line);
 }
@@ -514,7 +505,6 @@ int main(int argc, char *argv[]) {
 
     handle_dedent(0, 0);
 
-    // Cabeçalho de Runtime C com Helpers Nativos do Python
     char final_c_code[MAX_CODE_SZ];
     snprintf(final_c_code, sizeof(final_c_code),
         "/* Código C Gerado Automaticamente pelo pythont 2.0 */\n"
