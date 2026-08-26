@@ -62,7 +62,7 @@ static void print_help(void) {
     printf("  pythont --help                   (Exibe esta ajuda)\n\n");
     printf("Recursos Suportados:\n");
     printf("  • Listas & Vetores: nums = [1, 2, 3] e acesso nums[0]\n");
-    printf("  • Operadores: +=, -=, *=, /=, %=, // (divisao int)\n");
+    printf("  • Operadores: +=, -=, *=, /=, %%=, // (divisao int)\n");
     printf("  • Built-ins: len(), min(), max(), abs(), input(), int()\n");
     printf("  • Controle: break, continue, pass, if/elif/else, while, for range\n");
     printf("  • def funcoes(args): com retornos e recursao\n");
@@ -392,7 +392,7 @@ static void transpile_line(char *line, int indent) {
     char *op_eq = NULL;
     if ((op_eq = strstr(line, "+=")) || (op_eq = strstr(line, "-=")) ||
         (op_eq = strstr(line, "*=")) || (op_eq = strstr(line, "/=")) ||
-        (op_eq = strstr(line, "%="))) {
+        (op_eq = strstr(line, "%%="))) {
         char op_symbol[3] = { op_eq[0], op_eq[1], '\0' };
         *op_eq = '\0';
         char *vstart = line;

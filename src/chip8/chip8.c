@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <termios.h>
 #include <sys/ioctl.h>
@@ -259,7 +260,7 @@ static void chip8_cycle(void) {
                         if (cpu.key[k]) { key_pressed = k; break; }
                     }
                     if (key_pressed >= 0) cpu.V[x] = (uint8_t)key_pressed;
-                    else cpu.pc -= 2; // Repete até pressionar
+                    else cpu.pc -= 2;
                     break;
                 }
                 case 0x15: cpu.delay_timer = cpu.V[x]; break;
@@ -347,12 +348,10 @@ int main(int argc, char *argv[]) {
     clock_gettime(CLOCK_MONOTONIC, &last_timer_update);
 
     while (keep_running) {
-        // Executa 10 instruções da CPU por frame (~600 Hz)
         for (int i = 0; i < 10; i++) {
             chip8_cycle();
         }
 
-        // Atualiza temporizadores a 60 Hz (16.6 ms)
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         double elapsed = (now.tv_sec - last_timer_update.tv_sec) + (now.tv_nsec - last_timer_update.tv_nsec) / 1e9;
@@ -365,18 +364,17 @@ int main(int argc, char *argv[]) {
 
         render_screen(rom_name);
 
-        // Trata entradas de teclado não-bloqueantes
         memset(cpu.key, 0, sizeof(cpu.key));
         char ch;
         while (read(STDIN_FILENO, &ch, 1) > 0) {
-            if (ch == 27 || ch == '0' || ch == 3) { // ESC ou '0' ou Ctrl+C para sair
+            if (ch == 27 || ch == '0' || ch == 3) {
                 keep_running = 0;
                 break;
             }
             map_key(ch, 1);
         }
 
-        usleep(2000); // 2ms sleep
+        usleep(2000);
     }
 
     return 0;
