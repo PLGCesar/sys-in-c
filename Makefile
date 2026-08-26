@@ -4,11 +4,11 @@ CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp tree pythont
-LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic lsh
+SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp tree pythont chip8 bytebeat
+LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic lsh mv mkdir
 
 # 'ls' omitido de INSTALL_LOW_TOOLS por segurança
-INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat df peekmem pv ps kill whoami ltop ping magic lsh
+INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat df peekmem pv ps kill whoami ltop ping magic lsh mv mkdir
 
 ALL_TOOLS = $(SRC_TOOLS) $(LOW_TOOLS)
 
@@ -133,6 +133,12 @@ tree: src/tree/tree.c $(LIB_IPC)
 pythont: src/pythont/pythont.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/pythont/pythont.c -o pythont $(LDFLAGS_IPC)
 
+chip8: src/chip8/chip8.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/chip8/chip8.c -o chip8 $(LDFLAGS_IPC)
+
+bytebeat: src/bytebeat/bytebeat.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/bytebeat/bytebeat.c -o bytebeat $(LDFLAGS_IPC) -lm
+
 # --- FERRAMENTAS LOW-UTILS ---
 chmod: low-utils/chmod.c low-utils/low.h
 	$(CC) $(CFLAGS) low-utils/chmod.c -o chmod
@@ -190,6 +196,12 @@ magic: low-utils/magic.c low-utils/low.h
 
 lsh: low-utils/lsh.c low-utils/low.h
 	$(CC) $(CFLAGS) low-utils/lsh.c -o lsh
+
+mv: low-utils/mv.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/mv.c -o mv
+
+mkdir: low-utils/mkdir.c low-utils/low.h
+	$(CC) $(CFLAGS) low-utils/mkdir.c -o mkdir
 
 # --- FREESTANDING / OS ---
 free: freestanding/kmem.c freestanding/kfixed.c freestanding/kprintf.c freestanding/kgfx.c freestanding/kringbuf.c freestanding/kstring.c freestanding/klist.c freestanding/kspinlock.c freestanding/kvfs.c freestanding/kata.c freestanding/kdiskfs.c freestanding/ksound.c freestanding/kbmp.c freestanding/main_test.c freestanding/kcalc.c
