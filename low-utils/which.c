@@ -27,13 +27,13 @@ static void print_help(const char *program) {
 
 static void print_example(const char *program) {
     printf("Examples:\n");
-    printf("  $ %s gcc\n");
+    printf("  $ %s gcc\n", program);
     printf("  /usr/bin/gcc\n\n");
-    printf("  $ %s -a sh\n");
+    printf("  $ %s -a sh\n", program);
     printf("  /usr/bin/sh\n");
     printf("  /bin/sh\n\n");
-    printf("  $ %s -c gcc\n");
-    printf("  $ %s --silent gcc\n", program, program);
+    printf("  $ %s -c gcc\n", program);
+    printf("  $ %s --silent gcc\n", program);
 }
 
 static void print_result(const char *path, int color, int silent) {
