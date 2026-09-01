@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <strings.h>
+#include <dirent.h>
 #include "low.h"
 
 #define BUFFER_SIZE 65536
@@ -21,12 +22,14 @@ static void print_help(void) {
     printf("  %s-b, --number-nonblank%s Number non-empty output lines\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s-E, --show-ends%s       Display '$' at the end of each line\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s-s, --squeeze-blank%s   Suppress repeated empty output lines\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %s-l, --list%s            List files in the current directory matching a name fragment\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s-h, --help%s            Display this formatted help guide and exit\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s-v, --version%s         Display version and repository information\n\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("%sEXAMPLES:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
     printf("  • %s./cat -n arquivo.c%s             (Exibe codigo com numeros de linha)\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
     printf("  • %s./cat -s -E texto.txt%s          (Comprime linhas vazias e exibe '$')\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
-    printf("  • %s./cat imagem.png%s               (Chama automaticamente o xxd)\n\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
+    printf("  • %s./cat imagem.png%s               (Chama automaticamente o xxd)\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
+    printf("  • %s./cat -l c%s                    (Lista arquivos cujo nome contem 'c')\n\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
 }
 
 static const char *binary_extensions[] = {
@@ -42,9 +45,7 @@ static int is_binary_file(const char *path) {
     for (int i = 0; binary_extensions[i] != NULL; i++) {
         size_t ext_len = strlen(binary_extensions[i]);
         if (path_len >= ext_len) {
-            if (strcasecmp(path + path_len - ext_len, binary_extensions[i]) == 0) {
-                return 1;
-            }
+            if (strcasecmp(path + path_len - ext_len, binary_extensions[i]) == 0) return 1;
         }
     }
     return 0;
@@ -69,7 +70,6 @@ static int run_xxd(const char *filepath) {
 static int cat_fast_fd(int fd, const char *filename) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read, bytes_written, total_written;
-
     while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
         total_written = 0;
         while (total_written < bytes_read) {
@@ -89,39 +89,52 @@ static int cat_formatted_fd(int fd, int opt_n, int opt_b, int opt_e, int opt_s) 
     ssize_t n = 0;
     int line_num = 1;
     int at_line_start = 1;
-    int prev_was_empty = 0;
     int consecutive_empty = 0;
-
     while ((n = read(fd, buffer, sizeof(buffer))) > 0) {
         for (ssize_t i = 0; i < n; i++) {
             char c = buffer[i];
-
             if (at_line_start) {
                 if (c == '\n') {
                     consecutive_empty++;
                     if (opt_s && consecutive_empty > 1) continue;
-                    if (opt_n && !opt_b) {
-                        printf("%6d  ", line_num++);
-                    }
+                    if (opt_n && !opt_b) printf("%6d  ", line_num++);
                 } else {
                     consecutive_empty = 0;
-                    if (opt_n || opt_b) {
-                        printf("%6d  ", line_num++);
-                    }
+                    if (opt_n || opt_b) printf("%6d  ", line_num++);
                 }
                 at_line_start = 0;
             }
-
             if (c == '\n') {
                 if (opt_e) putchar('$');
                 putchar('\n');
                 at_line_start = 1;
-            } else {
-                putchar(c);
-            }
+            } else putchar(c);
         }
     }
     return (n < 0) ? -1 : 0;
+}
+
+static int list_files(const char *fragment) {
+    DIR *dir = opendir(".");
+    if (dir == NULL) {
+        fprintf(stderr, "cat: cannot open current directory: %s\n", strerror(errno));
+        return 1;
+    }
+    struct dirent *entry;
+    int found = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (strstr(entry->d_name, fragment) != NULL) {
+            puts(entry->d_name);
+            found = 1;
+        }
+    }
+    closedir(dir);
+    if (!found) {
+        fprintf(stderr, "cat: no files matching '%s' in current directory\n", fragment);
+        return 1;
+    }
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -135,7 +148,13 @@ int main(int argc, char *argv[]) {
             print_help();
             return 0;
         }
-
+        if (strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--list") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "cat: option '-l' requires a name fragment\n");
+                return 1;
+            }
+            return list_files(argv[++i]);
+        }
         if (argv[i][0] == '-' && argv[i][1] != '\0' && strcmp(argv[i], "-") != 0) {
             if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--number") == 0) opt_n = 1;
             else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--number-nonblank") == 0) { opt_b = 1; opt_n = 1; }
@@ -153,45 +172,35 @@ int main(int argc, char *argv[]) {
                     }
                 }
             }
-        } else {
-            if (file_count < 256) files[file_count++] = argv[i];
-        }
+        } else if (file_count < 256) files[file_count++] = argv[i];
     }
 
     int has_formatting = (opt_n || opt_b || opt_e || opt_s);
     int has_errors = 0;
-
     if (file_count == 0) {
         if (has_formatting) cat_formatted_fd(STDIN_FILENO, opt_n, opt_b, opt_e, opt_s);
         else cat_fast_fd(STDIN_FILENO, "-");
         return 0;
     }
-
     for (int i = 0; i < file_count; i++) {
         if (strcmp(files[i], "-") == 0) {
             if (has_formatting) cat_formatted_fd(STDIN_FILENO, opt_n, opt_b, opt_e, opt_s);
             else cat_fast_fd(STDIN_FILENO, "-");
             continue;
         }
-
         if (!has_formatting && is_binary_file(files[i])) {
             if (run_xxd(files[i]) == 0) continue;
         }
-
         int fd = open(files[i], O_RDONLY);
         if (fd < 0) {
             fprintf(stderr, "cat: %s: %s\n", files[i], strerror(errno));
             has_errors = 1;
             continue;
         }
-
         if (has_formatting) {
             if (cat_formatted_fd(fd, opt_n, opt_b, opt_e, opt_s) < 0) has_errors = 1;
-        } else {
-            if (cat_fast_fd(fd, files[i]) < 0) has_errors = 1;
-        }
+        } else if (cat_fast_fd(fd, files[i]) < 0) has_errors = 1;
         close(fd);
     }
-
     return has_errors ? 1 : 0;
 }
