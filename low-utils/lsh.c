@@ -7,18 +7,21 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <pwd.h>
 #include <ctype.h>
 #include <time.h>
 #include <errno.h>
+#include <dirent.h>
+#include <termios.h>
 #include "low.h"
 
 #define MAX_LINE_LEN 2048
 #define MAX_ARGS     128
 #define MAX_PIPES    16
-#define MAX_HISTORY  100
+#define MAX_HISTORY  200
 #define MAX_ALIASES  32
 
 #define COLOR_RESET   "\033[0m"
@@ -42,100 +45,50 @@ static char history[MAX_HISTORY][MAX_LINE_LEN];
 static int history_count = 0;
 static lsh_alias_t alias_table[MAX_ALIASES];
 
+static struct termios orig_termios;
+static int raw_mode_active = 0;
+
+static const char *builtins_list[] = {
+    "cd", "pwd", "export", "unset", "alias", "unalias", "source", ".",
+    "read", "echo", "history", "which", "type", "clear", "cls", "time",
+    "exec", "help", "exit", "quit", NULL
+};
+
 static double get_time_sec(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0.0;
     return (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
 }
 
-// 1. Detecção Inteligente e Exportação de Variáveis Padrão
-static void init_default_env(void) {
-    uid_t uid = geteuid();
-
-    // Usuário
-    struct passwd *pw = getpwuid(uid);
-    if (pw && pw->pw_name) {
-        setenv("USER", pw->pw_name, 0);
-        setenv("LOGNAME", pw->pw_name, 0);
-    }
-
-    // TMPDIR Inteligente (Termux vs Root / Linux comum)
-    if (!getenv("TMPDIR")) {
-        if (uid != 0 && access("/data/data/com.termux/files/usr/tmp", W_OK) == 0) {
-            setenv("TMPDIR", "/data/data/com.termux/files/usr/tmp", 1);
-        } else if (access("/tmp", W_OK) == 0) {
-            setenv("TMPDIR", "/tmp", 1);
-        } else {
-            setenv("TMPDIR", "/data/data/com.termux/files/usr/tmp", 1);
-        }
-    }
-
-    // HOME Inteligente
-    if (!getenv("HOME")) {
-        if (pw && pw->pw_dir && strlen(pw->pw_dir) > 0) {
-            setenv("HOME", pw->pw_dir, 1);
-        } else if (uid == 0) {
-            setenv("HOME", "/root", 1);
-        } else if (access("/data/data/com.termux/files/home", F_OK) == 0) {
-            setenv("HOME", "/data/data/com.termux/files/home", 1);
-        } else {
-            setenv("HOME", "/tmp", 1);
-        }
-    }
-
-    // PATH com injeção automática de '.' (permite rodar ferramentas sem ./)
-    const char *cur_path = getenv("PATH");
-    char new_path[4096];
-    if (!cur_path || strlen(cur_path) == 0) {
-        if (access("/data/data/com.termux/files/usr/bin", F_OK) == 0) {
-            snprintf(new_path, sizeof(new_path), ".:/data/data/com.termux/files/usr/bin:/bin:/usr/bin:/usr/local/bin");
-        } else {
-            snprintf(new_path, sizeof(new_path), ".:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
-        }
-        setenv("PATH", new_path, 1);
-    } else if (strncmp(cur_path, ".:", 2) != 0 && strstr(cur_path, ":.:") == NULL) {
-        snprintf(new_path, sizeof(new_path), ".:%s", cur_path);
-        setenv("PATH", new_path, 1);
-    }
-
-    // SHLVL (Nível do Shell)
-    const char *shlvl = getenv("SHLVL");
-    int lvl = shlvl ? atoi(shlvl) + 1 : 1;
-    char lvl_str[16];
-    snprintf(lvl_str, sizeof(lvl_str), "%d", lvl);
-    setenv("SHLVL", lvl_str, 1);
-
-    // Shell Path
-    char self_path[512];
-    ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
-    if (len > 0) {
-        self_path[len] = '\0';
-        setenv("SHELL", self_path, 1);
-    }
+static const char *get_history_file(void) {
+    static char path[512];
+    const char *home = getenv("HOME");
+    if (!home || strlen(home) == 0) home = ".";
+    snprintf(path, sizeof(path), "%s/.lsh_history", home);
+    return path;
 }
 
-static void print_help(void) {
-    low_print_banner("lsh");
-    printf("%sUSAGE:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
-    printf("  ./lsh                      (Interactive shell session)\n");
-    printf("  ./lsh -c \"<COMMAND>\"       (Execute command line and exit)\n\n");
-    printf("%sDESCRIPTION:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
-    printf("  Low-level Unix shell with auto-env detection, alias engine, scripts, and pipes.\n\n");
-    printf("%sBUILT-IN COMMANDS:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
-    printf("  %scd [DIR|-]%s               Change directory (supports ~, -, and relative paths)\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %spwd%s                      Print current directory\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %sexport VAR=VAL%s           Export environment variable\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %sunset VAR%s                Remove environment variable\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %salias [NAME=CMD]%s         Create or list command aliases\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %sunalias NAME%s             Remove command alias\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %ssource <FILE> / . <FILE>%s Execute script in current shell environment\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %sread [-p prompt] VAR%s     Read input into variable\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %secho [-n|-e] [TEXT]%s      Display text with ANSI escape support\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %shistory%s                  List history (use !! to rerun)\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %stime <CMD>%s               Benchmark command duration\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %swhich <CMD>%s              Locate command in $PATH\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %sclear, cls%s               Clear terminal screen\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %sexit, quit%s               Terminate lsh session\n\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+static void load_history_from_file(void) {
+    FILE *fp = fopen(get_history_file(), "r");
+    if (!fp) return;
+    char line[MAX_LINE_LEN];
+    while (fgets(line, sizeof(line), fp) && history_count < MAX_HISTORY) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l - 1] == '\r' || line[l - 1] == '\n')) line[--l] = '\0';
+        if (l > 0) {
+            strncpy(history[history_count++], line, MAX_LINE_LEN - 1);
+        }
+    }
+    fclose(fp);
+}
+
+static void append_history_to_file(const char *cmd) {
+    if (!cmd || strlen(cmd) == 0) return;
+    FILE *fp = fopen(get_history_file(), "a");
+    if (fp) {
+        fprintf(fp, "%s\n", cmd);
+        fclose(fp);
+    }
 }
 
 static void add_history(const char *cmd) {
@@ -150,6 +103,108 @@ static void add_history(const char *cmd) {
         }
         strncpy(history[MAX_HISTORY - 1], cmd, MAX_LINE_LEN - 1);
     }
+    append_history_to_file(cmd);
+}
+
+static void disable_raw_mode(void) {
+    if (raw_mode_active) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+        raw_mode_active = 0;
+    }
+}
+
+static void enable_raw_mode(void) {
+    if (!raw_mode_active && isatty(STDIN_FILENO)) {
+        tcgetattr(STDIN_FILENO, &orig_termios);
+        struct termios raw = orig_termios;
+        raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
+        raw.c_iflag &= ~(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
+        raw.c_cflag |= (CS8);
+        raw.c_cc[VMIN] = 1;
+        raw.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+        raw_mode_active = 1;
+    }
+}
+
+static void init_default_env(void) {
+    uid_t uid = geteuid();
+    struct passwd *pw = getpwuid(uid);
+    if (pw && pw->pw_name) {
+        setenv("USER", pw->pw_name, 0);
+        setenv("LOGNAME", pw->pw_name, 0);
+    }
+
+    if (!getenv("TMPDIR")) {
+        if (uid != 0 && access("/data/data/com.termux/files/usr/tmp", W_OK) == 0) {
+            setenv("TMPDIR", "/data/data/com.termux/files/usr/tmp", 1);
+        } else if (access("/tmp", W_OK) == 0) {
+            setenv("TMPDIR", "/tmp", 1);
+        } else {
+            setenv("TMPDIR", "/data/data/com.termux/files/usr/tmp", 1);
+        }
+    }
+
+    if (!getenv("HOME")) {
+        if (pw && pw->pw_dir && strlen(pw->pw_dir) > 0) {
+            setenv("HOME", pw->pw_dir, 1);
+        } else if (uid == 0) {
+            setenv("HOME", "/root", 1);
+        } else if (access("/data/data/com.termux/files/home", F_OK) == 0) {
+            setenv("HOME", "/data/data/com.termux/files/home", 1);
+        } else {
+            setenv("HOME", "/tmp", 1);
+        }
+    }
+
+    const char *cur_path = getenv("PATH");
+    char new_path[4096];
+    if (!cur_path || strlen(cur_path) == 0) {
+        if (access("/data/data/com.termux/files/usr/bin", F_OK) == 0) {
+            snprintf(new_path, sizeof(new_path), ".:/data/data/com.termux/files/usr/bin:/bin:/usr/bin:/usr/local/bin");
+        } else {
+            snprintf(new_path, sizeof(new_path), ".:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+        }
+        setenv("PATH", new_path, 1);
+    } else if (strncmp(cur_path, ".:", 2) != 0 && strstr(cur_path, ":.:") == NULL) {
+        snprintf(new_path, sizeof(new_path), ".:%s", cur_path);
+        setenv("PATH", new_path, 1);
+    }
+
+    const char *shlvl = getenv("SHLVL");
+    int lvl = shlvl ? atoi(shlvl) + 1 : 1;
+    char lvl_str[16];
+    snprintf(lvl_str, sizeof(lvl_str), "%d", lvl);
+    setenv("SHLVL", lvl_str, 1);
+
+    char self_path[512];
+    ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
+    if (len > 0) {
+        self_path[len] = '\0';
+        setenv("SHELL", self_path, 1);
+    }
+}
+
+static void print_help(void) {
+    low_print_banner("lsh");
+    printf("%sUSAGE:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
+    printf("  ./lsh                      (Sessao de Shell Interativa com TAB Autocomplete)\n");
+    printf("  ./lsh -c \"<COMANDO>\"       (Executa comando em lote e sai)\n\n");
+    printf("%sCOMANDOS EMBUTIDOS:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
+    printf("  %scd [DIR|-]%s               Navega entre pastas (~, -, caminhos relativos)\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %spwd%s                      Exibe diretorio atual\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %sexport VAR=VAL%s           Define variaveis de ambiente\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %sunset VAR%s                Remove variaveis de ambiente\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %salias [NAME=CMD]%s         Cria ou lista apelidos de comandos\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %sunalias NAME%s             Remove um alias\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %ssource <ARQ> / . <ARQ>%s   Executa script no ambiente do shell\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %sread [-p prompt] VAR%s     Le entrada para uma variavel\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %secho [-n|-e] [TEXTO]%s     Exibe texto com suporte a escapes ANSI\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %shistory%s                  Historico de comandos salvos em ~/.lsh_history\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %stime <CMD>%s               Mede tempo de execucao com precisao\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %swhich <CMD>%s              Localiza executaveis no $PATH\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %sclear, cls%s               Limpa tela do terminal\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %sexit, quit%s               Encerra o lsh\n\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
 }
 
 static void sigint_handler(int sig) {
@@ -158,7 +213,7 @@ static void sigint_handler(int sig) {
     fflush(stdout);
 }
 
-static void print_prompt(void) {
+static void format_prompt(char *out_prompt, size_t max_len) {
     uid_t uid = geteuid();
     struct passwd *pw = getpwuid(uid);
     const char *user = pw ? pw->pw_name : "user";
@@ -175,15 +230,331 @@ static void print_prompt(void) {
     }
 
     if (last_exit_status != 0) {
-        printf("%s[%d]%s ", COLOR_ERR_RET, last_exit_status, COLOR_RESET);
+        snprintf(out_prompt, max_len, "%s[%d]%s %s%s%s%s@sys-in-c%s:%s%s%s%s%c%s ",
+                 COLOR_ERR_RET, last_exit_status, COLOR_RESET,
+                 COLOR_USER, user, COLOR_RESET,
+                 COLOR_HOST, COLOR_RESET,
+                 COLOR_PATH, display_cwd, COLOR_RESET,
+                 COLOR_PROMPT, (uid == 0) ? '#' : '$', COLOR_RESET);
+    } else {
+        snprintf(out_prompt, max_len, "%s%s%s%s@sys-in-c%s:%s%s%s%s%c%s ",
+                 COLOR_USER, user, COLOR_RESET,
+                 COLOR_HOST, COLOR_RESET,
+                 COLOR_PATH, display_cwd, COLOR_RESET,
+                 COLOR_PROMPT, (uid == 0) ? '#' : '$', COLOR_RESET);
+    }
+}
+
+// =========================================================================
+// MOTOR DE AUTOCOMPLETAR COM TAB (Comandos $PATH + Pastas/Arquivos)
+// =========================================================================
+static void perform_tab_completion(char *buf, size_t *len, size_t *pos, size_t max_len) {
+    size_t cur = *pos;
+    if (cur == 0 && *len == 0) return;
+
+    size_t token_start = cur;
+    while (token_start > 0 && buf[token_start - 1] != ' ' && buf[token_start - 1] != '\t' && buf[token_start - 1] != '|' && buf[token_start - 1] != '&' && buf[token_start - 1] != ';') {
+        token_start--;
     }
 
-    printf("%s%s%s%s@sys-in-c%s:%s%s%s%s%c%s ",
-           COLOR_USER, user, COLOR_RESET,
-           COLOR_HOST, COLOR_RESET,
-           COLOR_PATH, display_cwd, COLOR_RESET,
-           COLOR_PROMPT, (uid == 0) ? '#' : '$', COLOR_RESET);
+    char prefix[256] = "";
+    size_t plen = cur - token_start;
+    if (plen >= sizeof(prefix)) plen = sizeof(prefix) - 1;
+    strncpy(prefix, buf + token_start, plen);
+    prefix[plen] = '\0';
+
+    int is_command = 1;
+    for (size_t i = 0; i < token_start; i++) {
+        if (buf[i] != ' ' && buf[i] != '\t') {
+            is_command = 0;
+            break;
+        }
+    }
+
+    char matches[64][256];
+    int match_count = 0;
+
+    // 1. Completa Comandos Embutidos e $PATH
+    if (is_command && !strchr(prefix, '/')) {
+        for (int b = 0; builtins_list[b] != NULL && match_count < 64; b++) {
+            if (strncmp(builtins_list[b], prefix, plen) == 0) {
+                snprintf(matches[match_count++], 255, "%s", builtins_list[b]);
+            }
+        }
+
+        const char *penv = getenv("PATH");
+        if (penv) {
+            char pcopy[2048];
+            strncpy(pcopy, penv, sizeof(pcopy) - 1);
+            char *dir_token = strtok(pcopy, ":");
+            while (dir_token && match_count < 64) {
+                DIR *d = opendir(dir_token);
+                if (d) {
+                    struct dirent *de;
+                    while ((de = readdir(d)) != NULL && match_count < 64) {
+                        if (de->d_name[0] == '.') continue;
+                        if (strncmp(de->d_name, prefix, plen) == 0) {
+                            int exists = 0;
+                            for (int k = 0; k < match_count; k++) {
+                                if (strcmp(matches[k], de->d_name) == 0) { exists = 1; break; }
+                            }
+                            if (!exists) {
+                                snprintf(matches[match_count++], 255, "%s", de->d_name);
+                            }
+                        }
+                    }
+                    closedir(d);
+                }
+                dir_token = strtok(NULL, ":");
+            }
+        }
+    }
+
+    // 2. Completa Arquivos e Pastas Locais
+    if (match_count == 0) {
+        char dir_path[256] = ".";
+        char file_prefix[128] = "";
+
+        const char *last_slash = strrchr(prefix, '/');
+        if (last_slash) {
+            size_t dlen = last_slash - prefix;
+            if (dlen == 0) strcpy(dir_path, "/");
+            else {
+                strncpy(dir_path, prefix, dlen);
+                dir_path[dlen] = '\0';
+            }
+            strncpy(file_prefix, last_slash + 1, sizeof(file_prefix) - 1);
+        } else {
+            strncpy(file_prefix, prefix, sizeof(file_prefix) - 1);
+        }
+
+        DIR *d = opendir(dir_path);
+        if (d) {
+            struct dirent *de;
+            size_t fplen = strlen(file_prefix);
+            while ((de = readdir(d)) != NULL && match_count < 64) {
+                if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+                if (strncmp(de->d_name, file_prefix, fplen) == 0) {
+                    char full_check[512];
+                    snprintf(full_check, sizeof(full_check), "%s/%s", dir_path, de->d_name);
+                    struct stat st;
+                    int is_dir = (stat(full_check, &st) == 0 && S_ISDIR(st.st_mode));
+
+                    if (last_slash) {
+                        snprintf(matches[match_count++], 255, "%s%s%s%s",
+                                 dir_path, (strcmp(dir_path, "/") == 0) ? "" : "/", de->d_name, is_dir ? "/" : "");
+                    } else {
+                        snprintf(matches[match_count++], 255, "%s%s", de->d_name, is_dir ? "/" : "");
+                    }
+                }
+            }
+            closedir(d);
+        }
+    }
+
+    // Aplica o autocomplete
+    if (match_count == 1) {
+        size_t m_len = strlen(matches[0]);
+        char suffix[256];
+        snprintf(suffix, sizeof(suffix), "%s", matches[0] + plen);
+        size_t s_len = strlen(suffix);
+
+        if (*len + s_len + 1 < max_len) {
+            memmove(buf + cur + s_len, buf + cur, *len - cur + 1);
+            memcpy(buf + cur, suffix, s_len);
+            *len += s_len;
+            *pos += s_len;
+
+            if (matches[0][m_len - 1] != '/') {
+                memmove(buf + *pos + 1, buf + *pos, *len - *pos + 1);
+                buf[*pos] = ' ';
+                (*len)++;
+                (*pos)++;
+            }
+        }
+    } else if (match_count > 1) {
+        // Exibe opções encontradas
+        printf("\n");
+        for (int i = 0; i < match_count; i++) {
+            printf("  %s%s%s  ", COLOR_VAL, matches[i], COLOR_RESET);
+            if ((i + 1) % 4 == 0) printf("\n");
+        }
+        printf("\n");
+        char prompt_buf[512];
+        format_prompt(prompt_buf, sizeof(prompt_buf));
+        printf("%s%s", prompt_buf, buf);
+        fflush(stdout);
+    }
+}
+
+// =========================================================================
+// LEITOR INTERATIVO DE LINHA (Setas, Histórico, Cursor, TAB, Ctrl+L)
+// =========================================================================
+static int lsh_readline(const char *prompt, char *out_buf, size_t max_len) {
+    if (!isatty(STDIN_FILENO)) {
+        printf("%s", prompt);
+        fflush(stdout);
+        if (!fgets(out_buf, max_len, stdin)) return 0;
+        size_t l = strlen(out_buf);
+        while (l > 0 && (out_buf[l-1] == '\r' || out_buf[l-1] == '\n')) out_buf[--l] = '\0';
+        return 1;
+    }
+
+    enable_raw_mode();
+    printf("%s", prompt);
     fflush(stdout);
+
+    size_t len = 0;
+    size_t pos = 0;
+    out_buf[0] = '\0';
+
+    int hist_idx = history_count;
+    char temp_backup[MAX_LINE_LEN] = "";
+
+    while (1) {
+        char c;
+        if (read(STDIN_FILENO, &c, 1) <= 0) {
+            disable_raw_mode();
+            return 0;
+        }
+
+        // Enter
+        if (c == '\r' || c == '\n') {
+            printf("\n");
+            break;
+        }
+
+        // Ctrl + D (Sair se linha vazia)
+        if (c == 4) {
+            if (len == 0) {
+                disable_raw_mode();
+                printf("exit\n");
+                exit(0);
+            }
+            continue;
+        }
+
+        // Ctrl + C (Cancela linha)
+        if (c == 3) {
+            printf("^C\n");
+            out_buf[0] = '\0';
+            len = 0;
+            pos = 0;
+            char prompt_buf[512];
+            format_prompt(prompt_buf, sizeof(prompt_buf));
+            printf("%s", prompt_buf);
+            fflush(stdout);
+            continue;
+        }
+
+        // Ctrl + L (Limpar tela)
+        if (c == 12) {
+            printf("\033[H\033[J%s%s", prompt, out_buf);
+            if (pos < len) printf("\033[%zuD", len - pos);
+            fflush(stdout);
+            continue;
+        }
+
+        // TAB Autocomplete
+        if (c == '\t') {
+            perform_tab_completion(out_buf, &len, &pos, max_len);
+            printf("\r\033[K%s%s", prompt, out_buf);
+            if (pos < len) printf("\033[%zuD", len - pos);
+            fflush(stdout);
+            continue;
+        }
+
+        // Backspace
+        if (c == 127 || c == '\b') {
+            if (pos > 0) {
+                memmove(out_buf + pos - 1, out_buf + pos, len - pos + 1);
+                pos--;
+                len--;
+                printf("\r\033[K%s%s", prompt, out_buf);
+                if (pos < len) printf("\033[%zuD", len - pos);
+                fflush(stdout);
+            }
+            continue;
+        }
+
+        // Sequência de Escape (Setas / Home / End)
+        if (c == 27) {
+            char seq[4];
+            if (read(STDIN_FILENO, &seq[0], 1) <= 0) continue;
+            if (read(STDIN_FILENO, &seq[1], 1) <= 0) continue;
+
+            if (seq[0] == '[') {
+                if (seq[1] == 'A') { // Seta CIMA (Histórico Anterior)
+                    if (history_count > 0 && hist_idx > 0) {
+                        if (hist_idx == history_count) {
+                            strncpy(temp_backup, out_buf, sizeof(temp_backup) - 1);
+                        }
+                        hist_idx--;
+                        strncpy(out_buf, history[hist_idx], max_len - 1);
+                        len = strlen(out_buf);
+                        pos = len;
+                        printf("\r\033[K%s%s", prompt, out_buf);
+                        fflush(stdout);
+                    }
+                } else if (seq[1] == 'B') { // Seta BAIXO (Histórico Posterior)
+                    if (hist_idx < history_count) {
+                        hist_idx++;
+                        if (hist_idx == history_count) {
+                            strncpy(out_buf, temp_backup, max_len - 1);
+                        } else {
+                            strncpy(out_buf, history[hist_idx], max_len - 1);
+                        }
+                        len = strlen(out_buf);
+                        pos = len;
+                        printf("\r\033[K%s%s", prompt, out_buf);
+                        fflush(stdout);
+                    }
+                } else if (seq[1] == 'C') { // Seta DIREITA
+                    if (pos < len) {
+                        pos++;
+                        printf("\033[1C");
+                        fflush(stdout);
+                    }
+                } else if (seq[1] == 'D') { // Seta ESQUERDA
+                    if (pos > 0) {
+                        pos--;
+                        printf("\033[1D");
+                        fflush(stdout);
+                    }
+                } else if (seq[1] == 'H' || seq[1] == '1') { // Home
+                    if (pos > 0) {
+                        printf("\033[%zuD", pos);
+                        pos = 0;
+                        fflush(stdout);
+                    }
+                } else if (seq[1] == 'F' || seq[1] == '4') { // End
+                    if (pos < len) {
+                        printf("\033[%zuC", len - pos);
+                        pos = len;
+                        fflush(stdout);
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Caracteres comuns
+        if (isprint((unsigned char)c) || (unsigned char)c >= 128) {
+            if (len < max_len - 1) {
+                memmove(out_buf + pos + 1, out_buf + pos, len - pos + 1);
+                out_buf[pos] = c;
+                pos++;
+                len++;
+                out_buf[len] = '\0';
+                printf("\r\033[K%s%s", prompt, out_buf);
+                if (pos < len) printf("\033[%zuD", len - pos);
+                fflush(stdout);
+            }
+        }
+    }
+
+    disable_raw_mode();
+    return 1;
 }
 
 static void expand_variables(const char *in, char *out, size_t out_len) {
@@ -230,7 +601,6 @@ static void expand_tilde(const char *in, char *out, size_t out_len) {
     }
 }
 
-// Substituição de Aliases
 static void apply_alias(char *cmd_out, const char *cmd_in, size_t out_sz) {
     char first_word[64] = "";
     size_t i = 0;
@@ -282,7 +652,6 @@ static int find_in_path(const char *cmd, char *out_path, size_t max_len) {
 
 static void process_line(char *line);
 
-// Executa comandos embutidos (built-ins)
 static int handle_builtin(char **args) {
     if (!args[0]) return 0;
 
@@ -301,7 +670,7 @@ static int handle_builtin(char **args) {
     if (strcmp(args[0], "cd") == 0) {
         char target_dir[512];
         char current_cwd[512];
-        getcwd(current_cwd, sizeof(current_cwd));
+        if (!getcwd(current_cwd, sizeof(current_cwd))) strcpy(current_cwd, ".");
 
         if (!args[1] || strcmp(args[1], "~") == 0) {
             const char *home = getenv("HOME");
@@ -336,7 +705,6 @@ static int handle_builtin(char **args) {
         return 1;
     }
 
-    // Built-in echo avançado com -n e -e
     if (strcmp(args[0], "echo") == 0) {
         int opt_newline = 1;
         int opt_escape = 0;
@@ -373,7 +741,6 @@ static int handle_builtin(char **args) {
         return 1;
     }
 
-    // Built-in read
     if (strcmp(args[0], "read") == 0) {
         char prompt_txt[128] = "";
         char *var_name = NULL;
@@ -401,7 +768,6 @@ static int handle_builtin(char **args) {
         return 1;
     }
 
-    // Built-in source / . (Executa scripts)
     if (strcmp(args[0], "source") == 0 || strcmp(args[0], ".") == 0) {
         if (!args[1]) {
             fprintf(stderr, "lsh: informe o arquivo para executar\n");
@@ -425,7 +791,6 @@ static int handle_builtin(char **args) {
         return 1;
     }
 
-    // Built-in alias / unalias
     if (strcmp(args[0], "alias") == 0) {
         if (!args[1]) {
             for (int a = 0; a < MAX_ALIASES; a++) {
@@ -759,8 +1124,8 @@ static void process_line(char *line) {
 
 int main(int argc, char *argv[]) {
     init_default_env();
+    load_history_from_file();
 
-    // Cria alguns aliases padrão úteis
     alias_table[0] = (lsh_alias_t){"ll", "ls -la", 1};
     alias_table[1] = (lsh_alias_t){"cls", "clear", 1};
     alias_table[2] = (lsh_alias_t){"..", "cd ..", 1};
@@ -779,20 +1144,20 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, sigint_handler);
 
     printf("\n%s╭────────────────────────────────────────────────────────────────────────────╮%s\n", LOW_COLOR_BORDER, LOW_COLOR_RESET);
-    printf("%s│%s  %s[ lsh 2.5 - Intelligent Environment Unix Shell ]%s                         %s│%s\n",
+    printf("%s│%s  %s[ lsh 3.0 - Intelligent Environment Shell (TAB Autocomplete & History) ]%s %s│%s\n",
            LOW_COLOR_BORDER, LOW_COLOR_RESET, LOW_COLOR_LABEL, LOW_COLOR_RESET, LOW_COLOR_BORDER, LOW_COLOR_RESET);
-    printf("%s│%s  • $TMPDIR : %-60.60s %s│%s\n", LOW_COLOR_BORDER, LOW_COLOR_RESET, getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", LOW_COLOR_BORDER, LOW_COLOR_RESET);
-    printf("%s│%s  • $PATH   : Auto-injetado '.' (ferramentas rodam sem './')                 %s│%s\n", LOW_COLOR_BORDER, LOW_COLOR_RESET, LOW_COLOR_BORDER, LOW_COLOR_RESET);
-    printf("%s│%s  • Nivel   : SHLVL=%-2s | Aliases (ll, cls, ..) | Scripts (source / .)         %s│%s\n",
-           LOW_COLOR_BORDER, LOW_COLOR_RESET, getenv("SHLVL") ? getenv("SHLVL") : "1", LOW_COLOR_BORDER, LOW_COLOR_RESET);
+    printf("%s│%s  • $TMPDIR   : %-58.58s %s│%s\n", LOW_COLOR_BORDER, LOW_COLOR_RESET, getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", LOW_COLOR_BORDER, LOW_COLOR_RESET);
+    printf("%s│%s  • $PATH     : Auto-injetado '.' (ferramentas rodam sem './')                 %s│%s\n", LOW_COLOR_BORDER, LOW_COLOR_RESET, LOW_COLOR_BORDER, LOW_COLOR_RESET);
+    printf("%s│%s  • Recursos  : TAB (Completar) | ↑/↓ (Histórico) | Ctrl+L (Limpar) | Aliases  %s│%s\n", LOW_COLOR_BORDER, LOW_COLOR_RESET, LOW_COLOR_BORDER, LOW_COLOR_RESET);
     printf("%s╰────────────────────────────────────────────────────────────────────────────╯%s\n\n", LOW_COLOR_BORDER, LOW_COLOR_RESET);
 
     char raw_line[MAX_LINE_LEN];
+    char prompt_buf[512];
 
     while (1) {
-        print_prompt();
+        format_prompt(prompt_buf, sizeof(prompt_buf));
 
-        if (!fgets(raw_line, sizeof(raw_line), stdin)) {
+        if (!lsh_readline(prompt_buf, raw_line, sizeof(raw_line))) {
             printf("\n");
             break;
         }

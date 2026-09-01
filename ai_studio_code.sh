@@ -1,3 +1,6 @@
+echo "[*] Corrigindo e atualizando src/pythont/pythont.c com Hoisting de Escopo..."
+
+cat << 'EOF' > src/pythont/pythont.c
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -1732,3 +1735,11 @@ int main(int argc, char *argv[]) {
     utilipc_close();
     return 0;
 }
+EOF
+
+echo "[*] Compilando pythont 6.0 com Hoisting de Escopo..."
+gcc -Wall -Wextra -O2 -fPIC src/pythont/pythont.c -o pythont -L. -lutilipc -Wl,-rpath,. -lpthread
+
+echo "[✔] Compilado com sucesso!"
+echo "[*] Executando o teste examples/exemplo7.py..."
+./pythont examples/exemplo7.py
