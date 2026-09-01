@@ -45,8 +45,8 @@ jobs:
         echo "=== 5. Testando Pythont ==="
         echo 'print("Hello do GitHub Actions via Pythont!", 40 + 2)' > ci_test.py
         ./pythont ci_test.py
-        if [ -f exemplo.py ]; then ./pythont exemplo.py; fi
-        if [ -f exemplo2.py ]; then ./pythont exemplo2.py; fi
+        if [ -f examples/exemplo.py ]; then ./pythont examples/exemplo.py; fi
+        if [ -f examples/exemplo2.py ]; then ./pythont examples/exemplo2.py; fi
 
         echo "=== 6. Testando Low-Utils (whoami, chmod, magic, stat, tree, df) ==="
         ./whoami -s
