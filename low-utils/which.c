@@ -1,6 +1,5 @@
 #include "low.h"
 
-#include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -8,12 +7,43 @@ static int is_executable(const char *path) {
     return access(path, X_OK) == 0;
 }
 
-int main(int argc, char **argv) {
-    low_print_banner("which");
+static void print_help(const char *program) {
+    printf("Usage: %s COMMAND [COMMAND ...]\n\n", program);
+    printf("Find an executable command by searching the directories in PATH.\n");
+    printf("For each command, prints the first executable found.\n\n");
+    printf("Options:\n");
+    printf("  --help       Show this help message.\n");
+    printf("  -example     Show a usage example.\n\n");
+    printf("Examples:\n");
+    printf("  %s gcc\n", program);
+    printf("  %s gcc make\n", program);
+    printf("  %s /usr/bin/gcc\n", program);
+}
 
+static void print_example(const char *program) {
+    printf("Example:\n");
+    printf("  $ %s gcc\n", program);
+    printf("  /usr/bin/gcc\n\n");
+    printf("The command is searched in each directory listed in PATH.\n");
+}
+
+int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s COMMAND [COMMAND ...]\n", argv[0]);
+        low_print_banner("which");
+        print_help(argv[0]);
         return 2;
+    }
+
+    if (strcmp(argv[1], "--help") == 0) {
+        low_print_banner("which");
+        print_help(argv[0]);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "-example") == 0) {
+        low_print_banner("which");
+        print_example(argv[0]);
+        return 0;
     }
 
     const char *path_env = getenv("PATH");
@@ -27,11 +57,12 @@ int main(int argc, char **argv) {
     for (int arg = 1; arg < argc; ++arg) {
         const char *command = argv[arg];
 
-        /* If the command already contains '/', check it directly. */
         if (strchr(command, '/') != NULL) {
             if (is_executable(command)) {
                 puts(command);
                 found_any = 1;
+            } else {
+                fprintf(stderr, "%s: %s not found\n", argv[0], command);
             }
             continue;
         }
