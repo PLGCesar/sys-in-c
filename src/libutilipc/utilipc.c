@@ -39,6 +39,27 @@ static void unlock_shm(void) {
     pthread_mutex_unlock(&shm_ptr->lock);
 }
 
+static void update_simulated_mem_matrix(utilipc_data_t *d) {
+    memcpy(d->mem_slots_prev, d->mem_slots, UTILIPC_MEM_CHUNKS);
+
+    // Blocos 0..3 reservados para o Kernel/IPC Core
+    d->mem_slots[0] = MEM_SLOT_PINNED;
+    d->mem_slots[1] = MEM_SLOT_KERNEL;
+    d->mem_slots[2] = MEM_SLOT_KERNEL;
+
+    int active_load = (d->total_ipc_calls % 10) + d->active_proc_count * 3;
+    if (active_load > 28) active_load = 28;
+
+    for (int i = 3; i < UTILIPC_MEM_CHUNKS; i++) {
+        if (i < 3 + active_load) {
+            d->mem_slots[i] = (i % 3 == 0) ? MEM_SLOT_CACHE : MEM_SLOT_ACTIVE;
+        } else {
+            d->mem_slots[i] = MEM_SLOT_FREE;
+        }
+    }
+    d->last_slot_update = time(NULL);
+}
+
 int utilipc_init(void) {
     if (shm_ptr && shm_ptr != MAP_FAILED) return 0;
 
@@ -57,7 +78,6 @@ int utilipc_init(void) {
         shm_fd = open(path, O_RDWR);
         if (shm_fd < 0) return -1;
 
-        // Auto-redimensiona caso o arquivo no disco seja menor (Evita SIGBUS!)
         struct stat st;
         if (fstat(shm_fd, &st) == 0 && (size_t)st.st_size < sizeof(utilipc_shm_t)) {
             if (ftruncate(shm_fd, sizeof(utilipc_shm_t)) < 0) {
@@ -83,8 +103,11 @@ int utilipc_init(void) {
         pthread_mutexattr_destroy(&attr);
 
         memset(&shm_ptr->data, 0, sizeof(utilipc_data_t));
-        strncpy(shm_ptr->data.last_action, "SHM Initialized", UTILIPC_MAX_MSG - 1);
+        strncpy(shm_ptr->data.last_action, "IPC Shared Memory Initialized", UTILIPC_MAX_MSG - 1);
+        strncpy(shm_ptr->data.last_writer, "system_boot", 31);
+        shm_ptr->data.last_caller_pid = getpid();
         shm_ptr->data.last_updated = time(NULL);
+        update_simulated_mem_matrix(&shm_ptr->data);
     }
 
     return 0;
@@ -95,6 +118,7 @@ int utilipc_log(const char *tool, const char *action) {
 
     lock_shm();
     time_t now = time(NULL);
+    pid_t my_pid = getpid();
 
     unsigned int idx = (shm_ptr->data.history_head + shm_ptr->data.history_count) % UTILIPC_HISTORY_SIZE;
     strncpy(shm_ptr->data.history[idx].tool, tool ? tool : "unknown", 31);
@@ -109,15 +133,55 @@ int utilipc_log(const char *tool, const char *action) {
         shm_ptr->data.history_head = (shm_ptr->data.history_head + 1) % UTILIPC_HISTORY_SIZE;
     }
 
+    if (tool) {
+        strncpy(shm_ptr->data.last_writer, tool, 31);
+        shm_ptr->data.last_writer[31] = '\0';
+    }
     if (action) {
         strncpy(shm_ptr->data.last_action, action, UTILIPC_MAX_MSG - 1);
         shm_ptr->data.last_action[UTILIPC_MAX_MSG - 1] = '\0';
     }
+    shm_ptr->data.last_caller_pid = my_pid;
     shm_ptr->data.last_updated = now;
     shm_ptr->data.total_ipc_calls++;
 
+    update_simulated_mem_matrix(&shm_ptr->data);
+
     unlock_shm();
     return 0;
+}
+
+int utilipc_send_msg(const char *sender, const char *target, const char *msg) {
+    if (!shm_ptr && utilipc_init() < 0) return -1;
+
+    lock_shm();
+    time_t now = time(NULL);
+
+    unsigned int idx = (shm_ptr->data.comm_head + shm_ptr->data.comm_count) % UTILIPC_HISTORY_SIZE;
+    strncpy(shm_ptr->data.comm_log[idx].sender_tool, sender ? sender : "ipc_client", 31);
+    strncpy(shm_ptr->data.comm_log[idx].target_tool, target ? target : "broadcast", 31);
+    strncpy(shm_ptr->data.comm_log[idx].message, msg ? msg : "", UTILIPC_MAX_MSG - 1);
+    shm_ptr->data.comm_log[idx].sender_pid = getpid();
+    shm_ptr->data.comm_log[idx].timestamp = now;
+
+    if (shm_ptr->data.comm_count < UTILIPC_HISTORY_SIZE) {
+        shm_ptr->data.comm_count++;
+    } else {
+        shm_ptr->data.comm_head = (shm_ptr->data.comm_head + 1) % UTILIPC_HISTORY_SIZE;
+    }
+    unlock_shm();
+
+    return utilipc_log(sender, msg);
+}
+
+void utilipc_touch_mem_chunk(int chunk_idx, uint8_t state) {
+    if (!shm_ptr && utilipc_init() < 0) return;
+    if (chunk_idx < 0 || chunk_idx >= UTILIPC_MEM_CHUNKS) return;
+
+    lock_shm();
+    shm_ptr->data.mem_slots[chunk_idx] = state;
+    shm_ptr->data.last_slot_update = time(NULL);
+    unlock_shm();
 }
 
 int utilipc_write_status(double ram_used, double ram_total, double load1, const char *action) {

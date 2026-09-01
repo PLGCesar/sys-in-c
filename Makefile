@@ -1,20 +1,29 @@
+
 PREFIX ?= /usr/local
 CC ?= gcc
 CFLAGS ?= -Wall -Wextra -O2 -fPIC
 LDFLAGS_IPC = -L. -lutilipc -Wl,-rpath,. -lpthread
 
 LIB_IPC = libutilipc.so
-SRC_TOOLS = calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp tree pythont chip8 bytebeat disasm asciiray
+SRC_TOOLS = sysbox calc passgen bigfiles portcheck hashcalc b64 sysinfo org netinfo ffind ipcmon simplehost watchcmd strutils fdup deview cpuplot qrcli bench get-info utils-help netclip snc jsonview speedtest httpget tedit netscan dnsquery diskbench krypt rawcat hwcaps matrix pwr sntp tree pythont chip8 bytebeat disasm asciiray
+HEAVY_TOOLS = raycast3d
 LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic lsh mv mkdir jail which
 INSTALL_LOW_TOOLS = chmod cat rmd cp xxd ln stat ls df peekmem pv ps kill whoami ltop ping magic lsh mv mkdir jail which
-ALL_TOOLS = $(SRC_TOOLS) $(LOW_TOOLS)
+ALL_TOOLS = $(SRC_TOOLS) $(HEAVY_TOOLS) $(LOW_TOOLS)
 
 all: $(LIB_IPC) $(ALL_TOOLS)
 
 $(LIB_IPC): src/libutilipc/utilipc.c src/libutilipc/utilipc.h
 	$(CC) $(CFLAGS) -shared src/libutilipc/utilipc.c -o $(LIB_IPC) -lpthread
 
+# --- HEAVY-UTILS ---
+raycast3d: heavy_utils/raycast3d.c $(LIB_IPC)
+	$(CC) $(CFLAGS) heavy_utils/raycast3d.c -o raycast3d $(LDFLAGS_IPC) -lm
+
 # --- FERRAMENTAS SRC ---
+sysbox: src/sysbox/sysbox.c $(LIB_IPC)
+	$(CC) $(CFLAGS) src/sysbox/sysbox.c -o sysbox $(LDFLAGS_IPC) -lm
+
 calc: src/calc/calc.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/calc/calc.c -o calc $(LDFLAGS_IPC) -lm
 passgen: src/passgen/passgen.c $(LIB_IPC)
@@ -89,12 +98,8 @@ sntp: src/sntp/sntp.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/sntp/sntp.c -o sntp $(LDFLAGS_IPC) -lm
 tree: src/tree/tree.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/tree/tree.c -o tree $(LDFLAGS_IPC)
-
-# Pythont está novamente na versão monolítica estável.
-# Não compilar os módulos experimentais lexer/parser/codegen/runtime.
 pythont: src/pythont/pythont.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/pythont/pythont.c -o pythont $(LDFLAGS_IPC) -lm
-
 chip8: src/chip8/chip8.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/chip8/chip8.c -o chip8 $(LDFLAGS_IPC)
 bytebeat: src/bytebeat/bytebeat.c $(LIB_IPC)
@@ -159,12 +164,12 @@ install: all
 	install -d $(DESTDIR)$(PREFIX)/lib
 	install -m 755 $(LIB_IPC) $(DESTDIR)$(PREFIX)/lib/$(LIB_IPC)
 	install -d $(DESTDIR)$(PREFIX)/bin
-	for tool in $(SRC_TOOLS); do install -m 755 $$tool $(DESTDIR)$(PREFIX)/bin/$$tool; done
+	for tool in $(SRC_TOOLS) $(HEAVY_TOOLS); do install -m 755 $$tool $(DESTDIR)$(PREFIX)/bin/$$tool; done
 	for ltool in $(INSTALL_LOW_TOOLS); do install -m 755 $$ltool $(DESTDIR)$(PREFIX)/bin/$$ltool; done
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/lib/$(LIB_IPC)
-	for tool in $(SRC_TOOLS); do rm -f $(DESTDIR)$(PREFIX)/bin/$$tool; done
+	for tool in $(SRC_TOOLS) $(HEAVY_TOOLS); do rm -f $(DESTDIR)$(PREFIX)/bin/$$tool; done
 	for ltool in $(INSTALL_LOW_TOOLS); do rm -f $(DESTDIR)$(PREFIX)/bin/$$ltool; done
 
 clean:
