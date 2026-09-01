@@ -1,0 +1,162 @@
+===============================================================================
+       PYTHONT - HIGH-PERFORMANCE PYTHON TO NATIVE C JIT TRANSPILER
+===============================================================================
+
+1. OVERVIEW & PHILOSOPHY
+-------------------------------------------------------------------------------
+PYTHONT is a lightweight, zero-dependency Python-to-C source-to-source 
+transpiler and Just-In-Time (JIT) native compilation engine written in pure C.
+
+It transforms Python scripts, object-oriented code, dictionaries, lists, and 
+mathematical operations directly into optimized, standalone ANSI C code. It 
+then invokes GCC/Clang with -O2 optimization to produce native machine binaries 
+executing at bare-metal speeds.
+
+It bridges the readability and developer productivity of Python with the raw 
+execution speed and low memory footprint of compiled C.
+
+
+2. ARCHITECTURE & TRANSPILATION PIPELINE
+-------------------------------------------------------------------------------
+A. MULTI-LINE TOKEN & BLOCK ACCUMULATOR
+   - Safely aggregates multi-line expressions, dictionaries { ... }, lists 
+     [ ... ], and function parameters ( ... ) before passing them to the 
+     transpiler engine.
+   - Automatically tracks indentation levels (4 spaces or tabs) and handles 
+     block closing (dedent) mapping to C braces { }.
+
+B. TYPE INFERENCE & SYMBOL REGISTRATION
+   - Automatically deduces and registers variable types during assignment:
+     * VAR_INT   -> int64_t (64-bit signed integers)
+     * VAR_FLOAT -> double (64-bit IEEE-754 floating point)
+     * VAR_STR   -> const char * (Null-terminated ASCII/UTF-8 strings)
+     * VAR_LIST  -> int64_t array[1024] with tracked length
+     * VAR_DICT  -> py_dict_t dynamic string/number key-value store
+     * VAR_OBJ   -> Custom struct mapping with constructor initialization
+     * VAR_FILE  -> py_file_t file descriptor handle
+
+C. WARNING-FREE RUNTIME TEMPLATE
+   - Generates C code incorporating static inline helper routines marked with 
+     __attribute__((unused)) and #pragma GCC diagnostic ignored, ensuring 100% 
+     silent, warning-free compilation under strict GCC and Clang environments.
+
+
+3. LANGUAGE SPECIFICATION & SUPPORTED SYNTAX
+-------------------------------------------------------------------------------
+
+A. F-STRINGS & STRING INTERPOLATION
+   - Automatically parses f"..." and f'...' constructs.
+   - Extracts expressions enclosed in { ... }, including nested quotes such as 
+     {user['name']} or {x * 2}.
+   - Automatically maps format specifiers (%s for strings, %lld for integers, 
+     %f for doubles) and casts arguments safely.
+
+B. DATA STRUCTURES: LISTS & VECTORS
+   - Initialization : numbers = [10, 20, 30]
+   - Element Access : first = numbers[0]
+   - Dynamic Append : numbers.append(40) -> increments tracked list size
+   - Dynamic Pop    : numbers.pop()      -> decrements tracked list size
+   - Built-ins      : len(numbers)       -> returns list length
+                      sum(numbers)       -> sums all elements via py_sum()
+
+C. DATA STRUCTURES: DICTIONARIES (dict)
+   - Literal syntax : user = {'name': 'Cesar', 'age': 20, 'balance': 150.5}
+   - Key Retrieval  : print(user['name'])
+   - Key Mutation   : user['age'] = 21 (updates existing entry)
+   - Key Insertion  : user['city'] = 'Brasilia' (creates new entry)
+   - Format Support : Works seamlessly inside f-strings: print(f"{user['name']}")
+
+D. STRING SLICING & MANIPULATION
+   - Substring Slicing : text[0:5] (extracts first 5 characters)
+   - Prefix / Suffix   : text[:4] or text[4:]
+   - String Reversal   : text[::-1] (inverts character order in-place)
+   - String Methods    : text.upper()   -> converts to uppercase
+                         text.lower()   -> converts to lowercase
+                         text.replace(old, new) -> word substitution
+
+E. OBJECT-ORIENTED PROGRAMMING (POO / CLASSES)
+   - Class definitions map directly to C typedef struct.
+   - The constructor def __init__(self, ...) initializes fields and returns the 
+     populated struct instance.
+   - Methods def method(self, arg): receive a pointer to the struct (*self).
+   - Method invocation obj.method(val) translates to Class_method(&obj, val).
+
+F. FILE INPUT & OUTPUT (I/O)
+   - Opening files     : f = open("output.txt", "w")
+   - Writing strings   : f.write("Line of text\n")
+   - Closing files     : f.close()
+   - Reading files     : f = open("output.txt", "r"); data = f.read(); f.close()
+
+G. MATHEMATICAL FUNCTIONS (math.*)
+   - math.sqrt(x)      -> maps to C sqrt(x)
+   - math.sin(rad)     -> maps to C sin(rad)
+   - math.cos(rad)     -> maps to C cos(rad)
+   - math.pow(base, exp) -> maps to C pow(base, exp)
+   - math.pi           -> maps to 3.14159265358979323846
+
+H. OPERATORS & CONTROL FLOW
+   - In-place operators: +=, -=, *=, /=, %=
+   - Integer division  : // (maps to integer / in C)
+   - Logical operators : and (&&), or (||), not (!)
+   - Boolean constants : True (1), False (0), None (NULL)
+   - Conditionals      : if, elif, else
+   - Loops             : while cond:, for var in range(start, end, step):
+   - Loop Controls     : break, continue, pass
+
+
+4. EXECUTION MODES & CLI FLAGS
+-------------------------------------------------------------------------------
+A. FILE EXECUTION MODE (Default JIT)
+   Transpiles the script, compiles via GCC, runs the binary, and unlinks 
+   temporary artifacts:
+     $ pythont script.py
+
+B. INLINE CODE EXECUTION (-e)
+   Executes a one-liner Python statement directly from the command line:
+     $ pythont -e "for i in range(1, 6): print(f'Square: {i*i}')"
+
+C. EMIT C CODE ONLY (-c, --emit-c)
+   Prints the generated native C source code directly to stdout without 
+   compiling or running:
+     $ pythont script.py -c
+
+D. STANDALONE BINARY OUTPUT (-o)
+   Compiles the Python script into a permanent native executable binary:
+     $ pythont script.py -o my_app
+     $ ./my_app
+
+E. INTERACTIVE REPL SHELL (>>>)
+   When invoked with no arguments in a terminal, launches an interactive 
+   live shell:
+     $ pythont
+     >>> x = 10
+     >>> print(f"Value: {x * 2}")
+
+
+5. COMPREHENSIVE CODE EXAMPLE
+-------------------------------------------------------------------------------
+
+# Define class
+class Monster:
+    def __init__(self, name, hp):
+        self.name = name
+        self.hp = hp
+    def heal(self, pts):
+        self.hp += pts
+
+# Instantiate object
+m = Monster('Dragon', 500)
+m.heal(100)
+print(f"Monster: {m.name} | Total HP: {m.hp}")
+
+# Dictionary and string operations
+config = {'mode': 'hardcore', 'level': 5}
+title = "pythont engine"
+print(f"Game Mode: {config['mode'].upper()} | Uppercase: {title.upper()}")
+
+# File I/O
+f = open("log.txt", "w")
+f.write("Log generated by pythont 5.0 native!\n")
+f.close()
+
+===============================================================================

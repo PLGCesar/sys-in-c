@@ -1,0 +1,146 @@
+===============================================================================
+       SYSBOX - RETRO-MODERN BIOS SETUP UTILITY & VIRTUAL PC DESKTOP
+===============================================================================
+
+1. OVERVIEW & PHILOSOPHY
+-------------------------------------------------------------------------------
+SYSBOX is a centralized Terminal User Interface (TUI) dashboard and program 
+launcher designed for the sys-in-c operating environment.
+
+It combines the ergonomic nostalgia of classic 1990s PC BIOS Setup Utilities 
+(such as Award, AMI, and Phoenix BIOS) with a modern pastel color palette 
+inspired by the Catppuccin / Kawaii theme, alongside a full-featured Virtual PC 
+Desktop Environment.
+
+It provides immediate access to all tools in the repository, live system 
+telemetry, inter-process communication (IPC) monitoring, and micro-app 
+execution across multiple programming languages.
+
+
+2. ARCHITECTURE & RENDERING ENGINE
+-------------------------------------------------------------------------------
+A. ABSOLUTE COORDINATE LOCKING (ZERO-SCROLL RENDERING)
+   - Eliminates terminal duplication and ghost scrolling artifacts by anchoring 
+     every frame line to exact row/column ANSI escape codes: \033[Row;ColH.
+   - Prevents terminal line-wrapping buffers from pushing text downward.
+
+B. EVENT-DRIVEN DIRTY REDRAW (CPU PRESERVATION)
+   - The TUI does not redraw in a busy loop.
+   - Screen updates occur only upon user keystrokes, window resizing, or on 
+     minute clock tick transitions, achieving zero CPU waste when idle.
+
+C. THEME SYSTEM (HOT-SWAPPABLE PALETTES)
+   SYSBOX includes 5 built-in TrueColor / ANSI pastel themes toggled via the 
+   'T' key:
+   * Sakura Pink    : Soft Rosewater background, Lavender borders, Mint items.
+   * Matcha Mint    : Sage and Mint green tones with Peach highlights.
+   * Lavender Dream : Catppuccin Mocha aesthetic with Purple and Sky accents.
+   * Sunbeam Peach  : Warm Gold and Peach tones with Dark Slate contrast.
+   * Cyber Sky      : Cool Azure and Cyan terminal styling.
+
+
+3. TABS & SUITE CATEGORIES
+-------------------------------------------------------------------------------
+The top navigation bar contains 7 distinct category tabs:
+
+A. [ GUI ] - Virtual Desktop Monitor
+   * Interactive virtual PC desktop with procedural Windows XP Bliss wallpaper.
+   * Direct runners and compilers for C, Python (pythont 5.0), and Java.
+
+B. [ Main ] - Core System Diagnostics
+   * sysinfo   : Minimal system information and Android/Linux detector.
+   * cpuplot   : Real-time animated graph of CPU, RAM, SWAP and Net latency.
+   * ltop      : Interactive process activity manager with process X-Ray.
+   * pwr       : Battery telemetry (Watts/mA) and CPU thermal sensors.
+   * bench     : Single and Multi-core CPU MOPs and RAM throughput benchmark.
+   * chip8     : 8-Bit virtual machine emulator with maze generator.
+
+C. [ System ] - Storage & File Utilities
+   * tedit     : Visual text/code editor with syntax highlighting & web server.
+   * tree      : Visual directory tree branch visualizer with permissions.
+   * ffind     : Fast recursive file finder with system path filtering.
+   * fdup      : Multithreaded duplicate file finder via SHA-256.
+   * diskbench : Storage sequential throughput (MB/s) and 4K random IOPS tester.
+   * org       : Automatic file organizer by extension and folder cleaner.
+   * krypt     : Military-grade ChaCha20 + HMAC file encryption vault.
+
+D. [ Network ] - Network & Packet Tools
+   * netscan   : Multi-threaded local Wi-Fi and subnet radar scanner.
+   * speedtest : Real-time download speed (Mbps) and CDN latency tester.
+   * netclip   : P2P local network clipboard and file transfer server.
+   * dnsquery  : Raw UDP DNS packet inspector (RFC 1035 A, AAAA, MX, TXT).
+   * sntp      : Atomic time synchronization and clock drift calculator (RFC 5905).
+   * portcheck : Multi-port TCP scanner with latency metrics.
+   * snc       : Subnet calculator and CIDR binary bitmask analyzer.
+
+E. [ Multimedia ] - Audio, 3D & Creative
+   * raycast3d : 60 FPS Wolfenstein-style 3D Raycasting FPS with minimap.
+   * bytebeat  : 8-bit, 16-bit and 24-bit Hi-Res procedural audio synthesizer.
+   * asciiray  : Real-time 3D Ray Tracer with reflective spheres.
+   * matrix    : Digital rain falling code screensaver.
+   * qrcli     : ISO-compliant QR Code generator with Wi-Fi connection tags.
+   * calc      : NASA Power-of-10 compliant mathematical evaluator.
+   * jsonview  : JSON syntax highlighter, validator, and shorthand parser.
+
+F. [ Low-Utils ] - Native POSIX Core Utilities
+   * lsh       : Intelligent shell with auto-environment and pipe support.
+   * whoami    : Deep process credential and security audit tool (-uo).
+   * ls        : Colorized directory lister with Inode tracking.
+   * cat       : High-performance byte stream concatenator and line numberer.
+   * rmd       : Military-grade anti-forensic crypto-shredder (O_DIRECT + AES).
+   * df        : Filesystem disk usage and Inode visual progress meters.
+   * jail      : Linux Seccomp-BPF security sandbox confinement.
+
+G. [ Setup ] - BIOS Preferences & Session Exit
+   * Theme toggling, shell launcher, and session termination.
+
+
+4. VIRTUAL DESKTOP ENVIRONMENT & MATHEMATICAL PROCEDURAL WALLPAPERS
+-------------------------------------------------------------------------------
+When opening the 'GUI' tab, SYSBOX transforms into a virtual PC desktop 
+rendered in 24-bit TrueColor:
+
+A. MATHEMATICAL WINDOWS XP BLISS GENERATOR
+   The iconic rolling green hill is computed in real-time through harmonic 
+   trigonometric functions:
+   - Rolling Hill Curve: y(x) = 0.52 + 0.14 * sin(x * 3.2 + 0.6) + 0.04 * cos(x * 7.5)
+   - Forefront Shading : y2(x) = 0.62 + 0.08 * sin(x * 4.5 + 2.1)
+   - Sky & Clouds      : Linear blue gradient layered with harmonic sine waves.
+
+B. MULTI-LANGUAGE MINI-APP DEVELOPMENT & EXECUTION
+   Inside the desktop, users can launch and test applications in 3 languages:
+   * C Language : Generates C code, compiles via 'gcc -O2 -lm', and executes.
+   * Python     : Generates Python code and runs via the native 'pythont 5.0' JIT.
+   * Java       : Generates Java classes and executes via JDK/JVM ('javac'/'java').
+
+C. INTERACTIVE MOUSE CURSOR & TASKBAR
+   * Move the mouse pointer with arrow keys over window items.
+   * Press Enter or Space to click and launch.
+   * Press 'W' to cycle wallpapers between XP Bliss, Cyber Sunset, and Sakura.
+
+
+5. KEYBOARD CONTROLS & SHORTCUTS
+-------------------------------------------------------------------------------
+- Left / Right Arrow (or TAB) : Switch between navigation tabs.
+- Up / Down Arrow             : Move item selection (auto-scrolls list).
+- Enter                       : Launch selected tool.
+- 'A' / 'a'                   : Open prompt to pass custom CLI arguments.
+- 'T' / 't'                   : Cycle pastel color themes.
+- 'W' / 'w'                   : Cycle wallpapers (inside GUI Desktop mode).
+- '1' to '5'                  : Direct app shortcut (inside GUI Desktop mode).
+- 'Q' / 'q' or ESC            : Exit tool / Return to previous view.
+
+
+6. LIVE HARDWARE TELEMETRY & MEMORY MATRIX
+-------------------------------------------------------------------------------
+SYSBOX communicates directly with the shared memory daemon (libutilipc.so):
+* 32-Block Memory Chunk Matrix:
+  Displays the live RAM layout with visual glyphs:
+  [■] Allocated / Active Block   [▣] Pinned / Locked Block
+  [▲] Cached Block               [░] Free / Unallocated Block
+* IPC Flight-Recorder:
+  Tracks which processes are active, the last sender/caller PID, and total calls.
+* Hardware Gauges:
+  Live RAM percentage bar from /proc/meminfo, CPU architecture, and Uptime.
+
+===============================================================================
