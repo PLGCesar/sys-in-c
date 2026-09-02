@@ -11,6 +11,7 @@
 #include <time.h>
 #include <utime.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <errno.h>
 #include "low.h"
 
@@ -49,7 +50,6 @@ static void *secure_alloc_and_lock(size_t size) {
     if (posix_memalign(&ptr, ALIGN_SIZE, size) != 0 || !ptr) {
         return NULL;
     }
-    // Trava na RAM física contra SWAP e impede vazamento em Core Dumps
     mlock(ptr, size);
     madvise(ptr, size, MADV_DONTDUMP);
     return ptr;
@@ -62,9 +62,6 @@ static void secure_unlock_and_free(void *ptr, size_t size) {
     free(ptr);
 }
 
-/* =========================================================================
- *  EXPURGO DE CACHES DO KERNEL & ATRIBUTOS ESTENDIDOS (XATTRS)
- * ========================================================================= */
 static void wipe_extended_attributes(int fd, const char *filepath) {
     char list[4096];
     ssize_t len = 0;
@@ -86,19 +83,19 @@ static void wipe_extended_attributes(int fd, const char *filepath) {
 }
 
 static void sync_parent_directory(const char *filepath) {
-    char dir_path[1024] = ".";
+    char dir_part[1024] = ".";
     const char *last_slash = strrchr(filepath, '/');
     if (last_slash) {
         size_t dlen = last_slash - filepath;
         if (dlen == 0) {
-            strcpy(dir_path, "/");
-        } else if (dlen < sizeof(dir_path)) {
-            strncpy(dir_path, filepath, dlen);
-            dir_path[dlen] = '\0';
+            strcpy(dir_part, "/");
+        } else if (dlen < sizeof(dir_part)) {
+            strncpy(dir_part, filepath, dlen);
+            dir_part[dlen] = '\0';
         }
     }
 
-    int dfd = open(dir_path, O_RDONLY | O_DIRECTORY);
+    int dfd = open(dir_part, O_RDONLY | O_DIRECTORY);
     if (dfd >= 0) {
         fsync(dfd);
         close(dfd);
@@ -116,7 +113,7 @@ static void drop_kernel_caches(void) {
 }
 
 /* =========================================================================
- *  MOTOR CRIPTOGRÁFICO PURO: CHACHA20 (STREAM CIPHER 256-BIT)
+ *  MOTOR CRIPTOGRÁFICO: CHACHA20 & AES-256-CTR
  * ========================================================================= */
 #define ROTL(a,b) (((a) << (b)) | ((a) >> (32 - (b))))
 #define QR(a, b, c, d) \
@@ -174,9 +171,6 @@ static void chacha20_crypt_stream(const uint8_t key[32], const uint8_t nonce[12]
     secure_bzero(n, sizeof(n));
 }
 
-/* =========================================================================
- *  MOTOR CRIPTOGRÁFICO PURO: AES-256-CTR (RIJNDAEL 14 ROUNDS)
- * ========================================================================= */
 static const uint8_t aes_sbox[256] = {
     0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
     0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
@@ -289,27 +283,19 @@ static void aes256_ctr_stream(const aes256_ctx_t *ctx, uint8_t iv[16], uint8_t *
 static void print_help(void) {
     low_print_banner("rmd");
     printf("%sUSAGE:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
-    printf("  ./rmd [OPTIONS] <FILE...>\n\n");
+    printf("  ./rmd [OPTIONS] <FILE/DIR...>\n\n");
     printf("%sDESCRIPTION:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
     printf("  Direct I/O Military Crypto-Shredder with Memory Lock, XAttr Purge & Directory Sync.\n\n");
     printf("%sOPTIONS:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
     printf("  %s-r, -R, --recursive%s  Remove directories and their contents recursively\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("  %s-p, --passes <N>%s     Number of wipe passes (1=zeros, 3=DoD zeros/ones/urandom) [Default: 1]\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s-f, --force%s          Ignore nonexistent files and never prompt\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
+    printf("  %s-p, --passes <N>%s     Number of wipe passes (1=zeros, 3=DoD zeros/ones/urandom) [Default: 1]\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s--no-preserve-root%s   Do not treat '/' specially (dangerous)\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s-h, --help%s           Display this formatted help guide and exit\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
     printf("  %s-v, --version%s        Display version and repository information\n\n", LOW_COLOR_BIN, LOW_COLOR_RESET);
-    printf("%s7-STAGE MILITARY ANTI-FORENSIC PIPELINE:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
-    printf("  1. %s[XATTR WIPE]%s Removes all extended attributes and security tags\n", COLOR_TAG, COLOR_RESET);
-    printf("  2. %s[DIRECT I/O]%s Bypasses OS page cache using O_DIRECT (aligned to 4KB)\n", COLOR_TAG, COLOR_RESET);
-    printf("  3. %s[CRYPTO-SHRED 1]%s In-place encrypts file with ephemeral %sAES-256-CTR%s\n", COLOR_CRYPTO, COLOR_RESET, COLOR_TAG, COLOR_RESET);
-    printf("  4. %s[CRYPTO-SHRED 2]%s In-place re-encrypts file with ephemeral %sChaCha20%s\n", COLOR_CRYPTO, COLOR_RESET, COLOR_TAG, COLOR_RESET);
-    printf("  5. %s[RAM PURGE]%s Keys locked with %smlock%s, %sMADV_DONTDUMP%s & wiped with %sexplicit_bzero%s\n", COLOR_OK, COLOR_RESET, COLOR_TAG, COLOR_RESET, COLOR_TAG, COLOR_RESET, COLOR_TAG, COLOR_RESET);
-    printf("  6. %s[DIR SYNC]%s Calls fsync() on file, parent directory and unlinks\n", COLOR_TAG, COLOR_RESET);
-    printf("  7. %s[CACHE FLUSH]%s Flushes kernel dentries & inode cache (/proc/sys/vm/drop_caches)\n\n", COLOR_TAG, COLOR_RESET);
-    printf("%sEXAMPLES:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
-    printf("  • %s./rmd secret.key%s               (Trituracao militar com cripto-wipe direto no disco)\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
-    printf("  • %s./rmd -p 3 -r ./pasta_sigilosa%s (Tritura pasta recursivamente)\n\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
+    printf("%sCOMBINED SHORT FLAGS SUPPORT:%s\n", LOW_COLOR_LABEL, LOW_COLOR_RESET);
+    printf("  • %s./rmd -rf ./pasta_antiga/%s           (Recursivo + Forçado sem confirmações)\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
+    printf("  • %s./rmd -rfp 3 ./segredos/%s            (Recursivo + Forçado + 3 passes DoD)\n\n", LOW_COLOR_TAG, LOW_COLOR_RESET);
 }
 
 static void obfuscate_and_unlink(const char *filepath) {
@@ -329,7 +315,6 @@ static void obfuscate_and_unlink(const char *filepath) {
     snprintf(obf_path, sizeof(obf_path), "%s/tmp_shred_%ld_%d", dir_part, time(NULL), rand() % 99999);
     rename(filepath, obf_path);
 
-    // Zera timestamps para o Epoch (01/01/1970)
     struct utimbuf ut = { .actime = 0, .modtime = 0 };
     utime(obf_path, &ut);
 
@@ -354,10 +339,8 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
     }
 
     if (S_ISREG(st.st_mode) && st.st_size > 0) {
-        // 1. Limpeza de atributos estendidos (XAttrs)
         wipe_extended_attributes(-1, filepath);
 
-        // 2. Abertura com Direct I/O (O_DIRECT) se suportado pelo filesystem
         int fd = open(filepath, O_RDWR | O_DIRECT);
         int is_direct = 1;
         if (fd < 0) {
@@ -370,7 +353,6 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
             return -1;
         }
 
-        // Aloca buffer alinhado a 4096 bytes travado na RAM contra Swap (mlock)
         uint8_t *aligned_buf = (uint8_t *)secure_alloc_and_lock(CHUNK_SIZE);
         if (!aligned_buf) {
             close(fd);
@@ -379,7 +361,6 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
 
         int rand_fd = open("/dev/urandom", O_RDONLY);
 
-        // 3. Passes Físicos de Sobrescrita (0x00, 0xFF, Random)
         for (int p = 1; p <= passes; p++) {
             lseek(fd, 0, SEEK_SET);
             off_t remaining = st.st_size;
@@ -394,7 +375,6 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
                     (void)r;
                 }
 
-                // Se O_DIRECT estiver ativo, alinha tamanho de escrita a 4KB
                 size_t write_sz = is_direct ? ((to_write + ALIGN_SIZE - 1) & ~(ALIGN_SIZE - 1)) : to_write;
                 ssize_t w = write(fd, aligned_buf, write_sz);
                 if (w < 0) break;
@@ -403,7 +383,7 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
             fsync(fd);
         }
 
-        // 4. CRIPTO-SHRED 1: AES-256-CTR com Chave Efêmera Travada na RAM
+        // Crypto Shred 1: AES-256-CTR
         if (rand_fd >= 0) {
             uint8_t *crypto_keys = (uint8_t *)secure_alloc_and_lock(48);
             if (crypto_keys) {
@@ -436,13 +416,12 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
                 }
                 fsync(fd);
 
-                // Destruição com explicit_bzero + munlock
                 secure_bzero(&aes_ctx, sizeof(aes_ctx));
                 secure_unlock_and_free(crypto_keys, 48);
             }
         }
 
-        // 5. CRIPTO-SHRED 2: ChaCha20 com Chave Efêmera Travada na RAM
+        // Crypto Shred 2: ChaCha20
         if (rand_fd >= 0) {
             uint8_t *crypto_keys = (uint8_t *)secure_alloc_and_lock(48);
             if (crypto_keys) {
@@ -477,7 +456,6 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
             }
         }
 
-        // 6. Truncamento Físico & Sincronização
         ftruncate(fd, 0);
         fsync(fd);
 
@@ -486,7 +464,6 @@ static int secure_shred_file(const char *filepath, int passes, int force) {
         close(fd);
     }
 
-    // 7. Ofuscação de Metadados, Sincronização do Diretório Pai e Unlink
     obfuscate_and_unlink(filepath);
 
     printf("  %s[OK: FORENSIC PURGE]%s %s%s%s (%d-pass | O_DIRECT + AES-256 + ChaCha20 + mlock + DirSync)\n",
@@ -529,22 +506,71 @@ int main(int argc, char *argv[]) {
     int recursive = 0, force = 0, passes = 1, preserve_root = 1;
     const char *targets[256];
     int target_count = 0;
+    int stop_flags = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0 ||
-            strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
-            print_help();
-            return 0;
+        if (!stop_flags && strcmp(argv[i], "--") == 0) {
+            stop_flags = 1;
+            continue;
         }
 
-        if (strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "-R") == 0 || strcmp(argv[i], "--recursive") == 0) recursive = 1;
-        else if (strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--force") == 0) force = 1;
-        else if (strcmp(argv[i], "--no-preserve-root") == 0) preserve_root = 0;
-        else if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--passes") == 0) {
-            if (i + 1 < argc) {
-                passes = atoi(argv[++i]);
-                if (passes <= 0) passes = 1;
-                if (passes > 10) passes = 10;
+        if (!stop_flags && argv[i][0] == '-' && argv[i][1] != '\0') {
+            // Flags Longas
+            if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+                print_help();
+                return 0;
+            }
+            if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+                print_help();
+                return 0;
+            }
+            if (strcmp(argv[i], "--recursive") == 0) {
+                recursive = 1;
+                continue;
+            }
+            if (strcmp(argv[i], "--force") == 0) {
+                force = 1;
+                continue;
+            }
+            if (strcmp(argv[i], "--no-preserve-root") == 0) {
+                preserve_root = 0;
+                continue;
+            }
+            if (strcmp(argv[i], "--passes") == 0) {
+                if (i + 1 < argc) {
+                    passes = atoi(argv[++i]);
+                    if (passes <= 0) passes = 1;
+                    if (passes > 10) passes = 10;
+                }
+                continue;
+            }
+
+            // Flags Curtas Combinadas (ex: -rf, -fr, -rfp 3, -p3)
+            size_t flen = strlen(argv[i]);
+            for (size_t j = 1; j < flen; j++) {
+                char opt = argv[i][j];
+                if (opt == 'r' || opt == 'R') {
+                    recursive = 1;
+                } else if (opt == 'f') {
+                    force = 1;
+                } else if (opt == 'h') {
+                    print_help();
+                    return 0;
+                } else if (opt == 'p') {
+                    if (j + 1 < flen && isdigit((unsigned char)argv[i][j + 1])) {
+                        passes = atoi(&argv[i][j + 1]);
+                        if (passes <= 0) passes = 1;
+                        if (passes > 10) passes = 10;
+                        break;
+                    } else if (i + 1 < argc && isdigit((unsigned char)argv[i + 1][0])) {
+                        passes = atoi(argv[++i]);
+                        if (passes <= 0) passes = 1;
+                        if (passes > 10) passes = 10;
+                        break;
+                    }
+                } else {
+                    if (!force) fprintf(stderr, "rmd: opcao desconhecida '-%c'\n", opt);
+                }
             }
         } else {
             if (target_count < 256) targets[target_count++] = argv[i];
@@ -570,7 +596,7 @@ int main(int argc, char *argv[]) {
             if (recursive) {
                 if (rmd_recursive(targets[i], passes, force) < 0) has_errors = 1;
             } else {
-                fprintf(stderr, "  %s[ERRO]%s '%s' e um diretorio (use -r para recursao)\n", COLOR_ERR, COLOR_RESET, targets[i]);
+                if (!force) fprintf(stderr, "  %s[ERRO]%s '%s' e um diretorio (use -r ou -rf para recursao)\n", COLOR_ERR, COLOR_RESET, targets[i]);
                 has_errors = 1;
             }
         } else {
@@ -578,8 +604,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Expurgo final de dentries e inodes do kernel caso executado como root
     drop_kernel_caches();
-
     return has_errors ? 1 : 0;
 }

@@ -6,6 +6,9 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <stdint.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <errno.h>
 #include "../libutilipc/utilipc.h"
 
@@ -15,14 +18,18 @@
 #define COLOR_ERR     "\033[1;31m"
 #define COLOR_TAG     "\033[1;33m"
 #define COLOR_FILE    "\033[1;36m"
+#define COLOR_SHRED   "\033[1;31m"
 
-#define KRYPT_MAGIC "KRYPT26\0"
-#define SALT_SIZE   16
-#define NONCE_SIZE  12
-#define HASH_SIZE   32
-#define CHUNK_SZ    65536
+#define KRYPT_MAGIC   "KRYPT20\0"
+#define SALT_SIZE     16
+#define NONCE_SIZE    12
+#define HASH_SIZE     32
+#define CHUNK_SZ      65536
 
-// --- SHA-256 INTERNO ---
+#define VAULT_TYPE_FILE 1
+#define VAULT_TYPE_DIR  2
+
+// --- MOTOR SHA-256 INTERNO ---
 typedef struct {
     uint8_t data[64];
     uint32_t datalen;
@@ -122,7 +129,7 @@ static void sha256_final(SHA256_CTX *ctx, uint8_t hash[]) {
     }
 }
 
-// Derivação de Chave PBKDF2-like (50.000 iterações de SHA-256 com Salt)
+// Derivação de Chave PBKDF2 (50.000 rounds)
 static void derive_key(const char *password, const uint8_t salt[SALT_SIZE], uint8_t key_out[32], uint8_t mac_key_out[32]) {
     uint8_t buffer[64 + SALT_SIZE];
     size_t pass_len = strlen(password);
@@ -146,10 +153,9 @@ static void derive_key(const char *password, const uint8_t salt[SALT_SIZE], uint
     }
     memcpy(key_out, current_hash, 32);
 
-    // Chave de MAC / Integridade
     sha256_init(&ctx);
     sha256_update(&ctx, current_hash, 32);
-    sha256_update(&ctx, (const uint8_t *)"INTEGRITY_KEY", 13);
+    sha256_update(&ctx, (const uint8_t *)"INTEGRITY_KEY_2.0", 17);
     sha256_final(&ctx, mac_key_out);
 }
 
@@ -189,7 +195,7 @@ static void chacha20_block(const uint32_t key[8], const uint32_t nonce[3], uint3
     }
 }
 
-static void chacha20_xor(const uint8_t key[32], const uint8_t nonce[12], uint32_t *counter, uint8_t *data, size_t len) {
+static void chacha20_crypt(const uint8_t key[32], const uint8_t nonce[12], uint32_t *counter, uint8_t *data, size_t len) {
     uint32_t k[8], n[3];
     for (int i = 0; i < 8; i++) k[i] = ((uint32_t *)key)[i];
     for (int i = 0; i < 3; i++) n[i] = ((uint32_t *)nonce)[i];
@@ -223,20 +229,135 @@ static void get_hidden_password(char *out_pass, size_t max_len) {
     while (l > 0 && (out_pass[l-1] == '\r' || out_pass[l-1] == '\n')) out_pass[--l] = '\0';
 }
 
-static int encrypt_file(const char *in_file, const char *out_file, const char *pass) {
-    int in_fd = open(in_file, O_RDONLY);
-    if (in_fd < 0) {
-        fprintf(stderr, "  %s[ERRO]%s Nao foi possivel abrir '%s': %s\n", COLOR_ERR, COLOR_RESET, in_file, strerror(errno));
+static void call_rmd_shred(const char *target_path) {
+    char rmd_cmd[1024];
+    snprintf(rmd_cmd, sizeof(rmd_cmd),
+             "./rmd -r -f \"%s\" 2>/dev/null || low-utils/rmd -r -f \"%s\" 2>/dev/null || rmd -r -f \"%s\"",
+             target_path, target_path, target_path);
+
+    printf("  %s[SHRED]%s Invocando rmd -r -f para destruição segura da origem '%s'...\n", COLOR_SHRED, COLOR_RESET, target_path);
+    (void)!system(rmd_cmd);
+}
+
+static void make_parent_dirs_for_file(const char *file_path) {
+    char temp[1024];
+    strncpy(temp, file_path, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+
+    for (char *p = temp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(temp, 0755);
+            *p = '/';
+        }
+    }
+}
+
+// Empacota diretório recursivamente para o arquivo temporário
+static int pack_directory_tree(int out_tmp_fd, const char *base_dir, const char *rel_prefix) {
+    DIR *dir = opendir(base_dir);
+    if (!dir) return -1;
+
+    struct dirent *de;
+    char full_path[2048];
+    char rel_path[2048];
+
+    while ((de = readdir(dir)) != NULL) {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+
+        snprintf(full_path, sizeof(full_path), "%s/%s", base_dir, de->d_name);
+        if (strlen(rel_prefix) > 0) {
+            snprintf(rel_path, sizeof(rel_path), "%s/%s", rel_prefix, de->d_name);
+        } else {
+            snprintf(rel_path, sizeof(rel_path), "%s", de->d_name);
+        }
+
+        struct stat st;
+        if (lstat(full_path, &st) != 0) continue;
+
+        uint16_t path_len = (uint16_t)strlen(rel_path);
+        uint8_t is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+        uint32_t mode = (uint32_t)st.st_mode;
+        uint64_t fsize = is_dir ? 0 : (uint64_t)st.st_size;
+
+        write(out_tmp_fd, &path_len, sizeof(path_len));
+        write(out_tmp_fd, rel_path, path_len);
+        write(out_tmp_fd, &is_dir, sizeof(is_dir));
+        write(out_tmp_fd, &mode, sizeof(mode));
+        write(out_tmp_fd, &fsize, sizeof(fsize));
+
+        if (is_dir) {
+            pack_directory_tree(out_tmp_fd, full_path, rel_path);
+        } else {
+            int in_fd = open(full_path, O_RDONLY);
+            if (in_fd >= 0) {
+                char chunk[CHUNK_SZ];
+                ssize_t n;
+                while ((n = read(in_fd, chunk, sizeof(chunk))) > 0) {
+                    write(out_tmp_fd, chunk, n);
+                }
+                close(in_fd);
+            }
+        }
+    }
+    closedir(dir);
+    return 0;
+}
+
+static int encrypt_vault(const char *in_target, const char *out_vault, const char *pass, int auto_shred) {
+    struct stat st;
+    if (lstat(in_target, &st) != 0) {
+        fprintf(stderr, "  %s[ERRO]%s Alvo '%s' nao encontrado: %s\n", COLOR_ERR, COLOR_RESET, in_target, strerror(errno));
         return -1;
     }
 
+    int is_dir = S_ISDIR(st.st_mode);
+    uint8_t vault_type = is_dir ? VAULT_TYPE_DIR : VAULT_TYPE_FILE;
+
+    const char *tmp_dir = getenv("TMPDIR");
+    if (!tmp_dir || strlen(tmp_dir) == 0) tmp_dir = "/tmp";
+    char payload_tmp[512];
+    snprintf(payload_tmp, sizeof(payload_tmp), "%s/krypt_tmp_%d.bin", tmp_dir, getpid());
+
+    int tmp_fd = open(payload_tmp, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (tmp_fd < 0) {
+        fprintf(stderr, "  %s[ERRO]%s Falha ao criar arquivo temporario em %s\n", COLOR_ERR, COLOR_RESET, payload_tmp);
+        return -1;
+    }
+
+    write(tmp_fd, &vault_type, sizeof(vault_type));
+
+    if (is_dir) {
+        printf("  Empacotando arvore de pastas de '%s'...\n", in_target);
+        pack_directory_tree(tmp_fd, in_target, "");
+        uint16_t end_mark = 0;
+        write(tmp_fd, &end_mark, sizeof(end_mark));
+    } else {
+        int in_fd = open(in_target, O_RDONLY);
+        if (in_fd < 0) {
+            close(tmp_fd);
+            unlink(payload_tmp);
+            return -1;
+        }
+        char chunk[CHUNK_SZ];
+        ssize_t n;
+        while ((n = read(in_fd, chunk, sizeof(chunk))) > 0) {
+            write(tmp_fd, chunk, n);
+        }
+        close(in_fd);
+    }
+
+    off_t payload_size = lseek(tmp_fd, 0, SEEK_CUR);
+    lseek(tmp_fd, 0, SEEK_SET);
+
+    // Gera Salt e Nonce aleatórios
     uint8_t salt[SALT_SIZE];
     uint8_t nonce[NONCE_SIZE];
     int rand_fd = open("/dev/urandom", O_RDONLY);
     if (rand_fd < 0 || read(rand_fd, salt, SALT_SIZE) != SALT_SIZE || read(rand_fd, nonce, NONCE_SIZE) != NONCE_SIZE) {
-        fprintf(stderr, "  %s[ERRO]%s Falha ao gerar salt seguro de /dev/urandom\n", COLOR_ERR, COLOR_RESET);
         if (rand_fd >= 0) close(rand_fd);
-        close(in_fd);
+        close(tmp_fd);
+        unlink(payload_tmp);
         return -1;
     }
     close(rand_fd);
@@ -244,48 +365,54 @@ static int encrypt_file(const char *in_file, const char *out_file, const char *p
     uint8_t key[32], mac_key[32];
     derive_key(pass, salt, key, mac_key);
 
-    int out_fd = open(out_file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int out_fd = open(out_vault, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (out_fd < 0) {
-        fprintf(stderr, "  %s[ERRO]%s Nao foi possivel criar '%s': %s\n", COLOR_ERR, COLOR_RESET, out_file, strerror(errno));
-        close(in_fd);
+        fprintf(stderr, "  %s[ERRO]%s Falha ao criar cofre '%s': %s\n", COLOR_ERR, COLOR_RESET, out_vault, strerror(errno));
+        close(tmp_fd);
+        unlink(payload_tmp);
         return -1;
     }
 
-    // Escreve cabeçalho: MAGIC + Salt + Nonce
     write(out_fd, KRYPT_MAGIC, 8);
     write(out_fd, salt, SALT_SIZE);
     write(out_fd, nonce, NONCE_SIZE);
-
-    uint8_t chunk[CHUNK_SZ];
-    ssize_t n = 0;
-    uint32_t counter = 1;
 
     SHA256_CTX mac_ctx;
     sha256_init(&mac_ctx);
     sha256_update(&mac_ctx, mac_key, 32);
 
-    while ((n = read(in_fd, chunk, sizeof(chunk))) > 0) {
-        chacha20_xor(key, nonce, &counter, chunk, n);
+    uint8_t chunk[CHUNK_SZ];
+    uint32_t counter = 1;
+    ssize_t n = 0;
+
+    while ((n = read(tmp_fd, chunk, sizeof(chunk))) > 0) {
+        chacha20_crypt(key, nonce, &counter, chunk, n);
         sha256_update(&mac_ctx, chunk, n);
         write(out_fd, chunk, n);
     }
 
-    uint8_t final_mac[32];
-    sha256_final(&mac_ctx, final_mac);
-    write(out_fd, final_mac, 32);
+    uint8_t hmac[32];
+    sha256_final(&mac_ctx, hmac);
+    write(out_fd, hmac, 32);
 
-    close(in_fd);
+    close(tmp_fd);
+    unlink(payload_tmp);
     close(out_fd);
 
-    printf("  %s[✔ SUCESSO]%s Arquivo criptografado em: %s%s%s (ChaCha20 + HMAC)\n",
-           COLOR_OK, COLOR_RESET, COLOR_FILE, out_file, COLOR_RESET);
+    printf("  %s[✔ COFRE CRIADO]%s '%s' (%s | ChaCha20 + HMAC | %lld bytes)\n",
+           COLOR_OK, COLOR_RESET, out_vault, is_dir ? "Diretório" : "Arquivo Único", (long long)payload_size);
+
+    if (auto_shred) {
+        call_rmd_shred(in_target);
+    }
+
     return 0;
 }
 
-static int decrypt_file(const char *in_file, const char *out_file, const char *pass) {
-    int in_fd = open(in_file, O_RDONLY);
+static int decrypt_vault(const char *in_vault, const char *out_target, const char *pass) {
+    int in_fd = open(in_vault, O_RDONLY);
     if (in_fd < 0) {
-        fprintf(stderr, "  %s[ERRO]%s Nao foi possivel abrir '%s': %s\n", COLOR_ERR, COLOR_RESET, in_file, strerror(errno));
+        fprintf(stderr, "  %s[ERRO]%s Nao foi possivel abrir '%s': %s\n", COLOR_ERR, COLOR_RESET, in_vault, strerror(errno));
         return -1;
     }
 
@@ -294,7 +421,7 @@ static int decrypt_file(const char *in_file, const char *out_file, const char *p
     uint8_t nonce[NONCE_SIZE];
 
     if (read(in_fd, magic, 8) != 8 || strcmp(magic, KRYPT_MAGIC) != 0) {
-        fprintf(stderr, "  %s[ERRO]%s O arquivo '%s' nao e um arquivo criptografado valido pelo krypt!\n", COLOR_ERR, COLOR_RESET, in_file);
+        fprintf(stderr, "  %s[ERRO]%s O arquivo '%s' nao e um cofre valido do krypt 2.0!\n", COLOR_ERR, COLOR_RESET, in_vault);
         close(in_fd);
         return -1;
     }
@@ -309,12 +436,12 @@ static int decrypt_file(const char *in_file, const char *out_file, const char *p
     off_t payload_sz = total_sz - 8 - SALT_SIZE - NONCE_SIZE - 32;
 
     if (payload_sz < 0) {
-        fprintf(stderr, "  %s[ERRO]%s Arquivo corrompido ou truncado!\n", COLOR_ERR, COLOR_RESET);
+        fprintf(stderr, "  %s[ERRO]%s Cofre truncado ou danificado!\n", COLOR_ERR, COLOR_RESET);
         close(in_fd);
         return -1;
     }
 
-    // 1. Verificação de Integridade e Senha
+    // 1. Verificação Estrita de Integridade e Senha (AEAD)
     lseek(in_fd, 8 + SALT_SIZE + NONCE_SIZE, SEEK_SET);
     SHA256_CTX mac_ctx;
     sha256_init(&mac_ctx);
@@ -330,81 +457,181 @@ static int decrypt_file(const char *in_file, const char *out_file, const char *p
         remaining -= n;
     }
 
-    uint8_t calc_mac[32], file_mac[32];
-    sha256_final(&mac_ctx, calc_mac);
-    read(in_fd, file_mac, 32);
+    uint8_t calc_hmac[32], file_hmac[32];
+    sha256_final(&mac_ctx, calc_hmac);
+    read(in_fd, file_hmac, 32);
 
-    if (memcmp(calc_mac, file_mac, 32) != 0) {
-        fprintf(stderr, "\n  %s[ERRO DE AUTENTICACAO]%s Senha incorreta ou arquivo adulterado!\n\n", COLOR_ERR, COLOR_RESET);
+    if (memcmp(calc_hmac, file_hmac, 32) != 0) {
+        fprintf(stderr, "\n  %s[ERRO DE AUTENTICACAO]%s Senha incorreta ou cofre adulterado!\n\n", COLOR_ERR, COLOR_RESET);
         close(in_fd);
         return -1;
     }
 
-    // 2. Descriptografia
+    // 2. Descriptografia para Arquivo Temporário
+    const char *tmp_dir = getenv("TMPDIR");
+    if (!tmp_dir || strlen(tmp_dir) == 0) tmp_dir = "/tmp";
+    char dec_tmp[512];
+    snprintf(dec_tmp, sizeof(dec_tmp), "%s/krypt_dec_%d.bin", tmp_dir, getpid());
+
+    int tmp_fd = open(dec_tmp, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (tmp_fd < 0) {
+        close(in_fd);
+        return -1;
+    }
+
     lseek(in_fd, 8 + SALT_SIZE + NONCE_SIZE, SEEK_SET);
-    int out_fd = open(out_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (out_fd < 0) {
-        close(in_fd);
-        return -1;
-    }
-
-    remaining = payload_sz;
     uint32_t counter = 1;
+    remaining = payload_sz;
     while (remaining > 0) {
         size_t to_r = (remaining > (off_t)sizeof(chunk)) ? sizeof(chunk) : remaining;
         ssize_t n = read(in_fd, chunk, to_r);
         if (n <= 0) break;
-        chacha20_xor(key, nonce, &counter, chunk, n);
-        write(out_fd, chunk, n);
+        chacha20_crypt(key, nonce, &counter, chunk, n);
+        write(tmp_fd, chunk, n);
         remaining -= n;
     }
-
     close(in_fd);
-    close(out_fd);
 
-    printf("  %s[✔ SUCESSO]%s Arquivo descriptografado com integridade verificada em: %s%s%s\n",
-           COLOR_OK, COLOR_RESET, COLOR_FILE, out_file, COLOR_RESET);
+    // 3. Desempacotamento de Arquivo ou Diretório
+    lseek(tmp_fd, 0, SEEK_SET);
+    uint8_t vault_type = 0;
+    read(tmp_fd, &vault_type, sizeof(vault_type));
+
+    if (vault_type == VAULT_TYPE_FILE) {
+        int out_fd = open(out_target, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (out_fd < 0) {
+            close(tmp_fd);
+            unlink(dec_tmp);
+            return -1;
+        }
+        ssize_t n;
+        while ((n = read(tmp_fd, chunk, sizeof(chunk))) > 0) {
+            write(out_fd, chunk, n);
+        }
+        close(out_fd);
+        printf("  %s[✔ ARQUIVO RECUPERADO]%s '%s'\n", COLOR_OK, COLOR_RESET, out_target);
+    } else if (vault_type == VAULT_TYPE_DIR) {
+        mkdir(out_target, 0755);
+        printf("  Restaurando arvore de pastas em '%s/'...\n", out_target);
+
+        while (1) {
+            uint16_t path_len = 0;
+            if (read(tmp_fd, &path_len, sizeof(path_len)) <= 0 || path_len == 0) break;
+
+            char rel_path[1024];
+            read(tmp_fd, rel_path, path_len);
+            rel_path[path_len] = '\0';
+
+            uint8_t is_dir = 0;
+            uint32_t mode = 0;
+            uint64_t fsize = 0;
+
+            read(tmp_fd, &is_dir, sizeof(is_dir));
+            read(tmp_fd, &mode, sizeof(mode));
+            read(tmp_fd, &fsize, sizeof(fsize));
+
+            char dest_item_path[2048];
+            snprintf(dest_item_path, sizeof(dest_item_path), "%s/%s", out_target, rel_path);
+
+            if (is_dir) {
+                mkdir(dest_item_path, (mode_t)mode);
+            } else {
+                make_parent_dirs_for_file(dest_item_path);
+                int out_f = open(dest_item_path, O_WRONLY | O_CREAT | O_TRUNC, (mode_t)mode);
+                if (out_f >= 0) {
+                    uint64_t file_rem = fsize;
+                    while (file_rem > 0) {
+                        size_t to_read = (file_rem > sizeof(chunk)) ? sizeof(chunk) : (size_t)file_rem;
+                        ssize_t rn = read(tmp_fd, chunk, to_read);
+                        if (rn <= 0) break;
+                        write(out_f, chunk, rn);
+                        file_rem -= rn;
+                    }
+                    close(out_f);
+                }
+            }
+        }
+        printf("  %s[✔ PASTA RECUPERADA]%s '%s/'\n", COLOR_OK, COLOR_RESET, out_target);
+    }
+
+    close(tmp_fd);
+    unlink(dec_tmp);
     return 0;
+}
+
+static void print_help(void) {
+    printf("%s=================================================================================%s\n", COLOR_TITLE, COLOR_RESET);
+    printf("%s[ krypt 2.0 - ChaCha20 + HMAC Vault & Auto-Shredder (rmd -r -f) ]%s\n", COLOR_TITLE, COLOR_RESET);
+    printf("%s=================================================================================%s\n", COLOR_TITLE, COLOR_RESET);
+    printf("Usage:\n");
+    printf("  krypt -e <ARQUIVO|PASTA> [-s] [-o <COFRE.kr>]    (Criptografar)\n");
+    printf("  krypt -d <COFRE.kr> [-o <DESTINO>]               (Descriptografar)\n\n");
+    printf("Opcoes:\n");
+    printf("  %s-e, --encrypt%s    Criptografar arquivo unico ou diretorio inteiro\n", COLOR_OK, COLOR_RESET);
+    printf("  %s-d, --decrypt%s    Descriptografar cofre autenticado\n", COLOR_OK, COLOR_RESET);
+    printf("  %s-s, --shred%s      Destruir a origem com rmd -r -f apos criptografar com sucesso\n", COLOR_SHRED, COLOR_RESET);
+    printf("  %s-o, --output%s     Especificar nome/caminho de saida personalizado\n", COLOR_TAG, COLOR_RESET);
+    printf("  %s--help%s           Exibir esta ajuda formatada\n\n", COLOR_TAG, COLOR_RESET);
+    printf("Exemplos:\n");
+    printf("  • %skrypt -e segredo.txt%s                     (Gera segredo.txt.kr)\n", COLOR_TAG, COLOR_RESET);
+    printf("  • %skrypt -e ./minha_pasta/ -s%s               (Criptografa a pasta e destroi a origem com rmd)\n", COLOR_TAG, COLOR_RESET);
+    printf("  • %skrypt -d minha_pasta.kr -o ./restaurado%s  (Restaura toda a pasta e arquivos)\n", COLOR_TAG, COLOR_RESET);
+    printf("%s=================================================================================%s\n", COLOR_TITLE, COLOR_RESET);
 }
 
 int main(int argc, char *argv[]) {
     utilipc_init();
 
     if (argc < 3 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
-        printf("%s========================================================%s\n", COLOR_TITLE, COLOR_RESET);
-        printf("%s[ krypt - Pure C ChaCha20 File Encryption Vault ]%s\n", COLOR_TITLE, COLOR_RESET);
-        printf("%s========================================================%s\n", COLOR_TITLE, COLOR_RESET);
-        printf("Usage:\n");
-        printf("  krypt -e <ARQUIVO> [-o <DESTINO.kr>]    (Criptografar)\n");
-        printf("  krypt -d <ARQUIVO.kr> [-o <DESTINO>]    (Descriptografar)\n\n");
-        printf("Exemplos:\n");
-        printf("  krypt -e segredo.txt\n");
-        printf("  krypt -d segredo.txt.kr -o recuperado.txt\n");
-        printf("%s========================================================%s\n", COLOR_TITLE, COLOR_RESET);
+        print_help();
         utilipc_close();
-        return 0;
+        return (argc < 3) ? 1 : 0;
     }
 
-    int mode_encrypt = (strcmp(argv[1], "-e") == 0);
-    int mode_decrypt = (strcmp(argv[1], "-d") == 0);
-    const char *in_file = argv[2];
-    char out_file[512] = "";
+    int mode_encrypt = 0, mode_decrypt = 0, auto_shred = 0;
+    const char *in_target = NULL;
+    char out_target[512] = "";
 
-    if (argc >= 5 && strcmp(argv[3], "-o") == 0) {
-        strncpy(out_file, argv[4], sizeof(out_file) - 1);
-    } else {
-        if (mode_encrypt) snprintf(out_file, sizeof(out_file), "%s.kr", in_file);
-        else {
-            strncpy(out_file, in_file, sizeof(out_file) - 1);
-            char *dot = strstr(out_file, ".kr");
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-e") == 0 || strcmp(argv[i], "--encrypt") == 0) {
+            mode_encrypt = 1;
+            if (i + 1 < argc && argv[i+1][0] != '-') in_target = argv[++i];
+        } else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--decrypt") == 0) {
+            mode_decrypt = 1;
+            if (i + 1 < argc && argv[i+1][0] != '-') in_target = argv[++i];
+        } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--shred") == 0) {
+            auto_shred = 1;
+        } else if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) && i + 1 < argc) {
+            strncpy(out_target, argv[++i], sizeof(out_target) - 1);
+        } else if (!in_target && argv[i][0] != '-') {
+            in_target = argv[i];
+        }
+    }
+
+    if (!in_target) {
+        print_help();
+        utilipc_close();
+        return 1;
+    }
+
+    // Define nomes padrão de saída caso -o não seja fornecido
+    if (strlen(out_target) == 0) {
+        if (mode_encrypt) {
+            char clean_target[512];
+            strncpy(clean_target, in_target, sizeof(clean_target) - 1);
+            size_t tl = strlen(clean_target);
+            while (tl > 1 && clean_target[tl-1] == '/') clean_target[--tl] = '\0';
+            snprintf(out_target, sizeof(out_target), "%s.kr", clean_target);
+        } else {
+            strncpy(out_target, in_target, sizeof(out_target) - 1);
+            char *dot = strstr(out_target, ".kr");
             if (dot) *dot = '\0';
-            else strcat(out_file, ".dec");
+            else strcat(out_target, "_dec");
         }
     }
 
     char pass[128];
     get_hidden_password(pass, sizeof(pass));
-
     if (strlen(pass) == 0) {
         fprintf(stderr, "krypt: senha nao pode ser vazia!\n");
         utilipc_close();
@@ -413,13 +640,13 @@ int main(int argc, char *argv[]) {
 
     int res = 0;
     if (mode_encrypt) {
-        res = encrypt_file(in_file, out_file, pass);
+        res = encrypt_vault(in_target, out_target, pass, auto_shred);
     } else if (mode_decrypt) {
-        res = decrypt_file(in_file, out_file, pass);
+        res = decrypt_vault(in_target, out_target, pass);
     }
 
     char log_msg[UTILIPC_MAX_MSG];
-    snprintf(log_msg, sizeof(log_msg), "krypt: %s '%s'", mode_encrypt ? "encrypted" : "decrypted", in_file);
+    snprintf(log_msg, sizeof(log_msg), "krypt: %s '%s' (shred: %d)", mode_encrypt ? "encrypted" : "decrypted", in_target, auto_shred);
     utilipc_write_status(-1, -1, -1, log_msg);
 
     utilipc_close();

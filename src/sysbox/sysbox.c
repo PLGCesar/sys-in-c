@@ -6,7 +6,6 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
-#include <sys/utsname.h>
 #include <math.h>
 #include <time.h>
 #include <ctype.h>
@@ -15,7 +14,7 @@
 
 #define MAX_ITEMS_PER_TAB 16
 #define TOTAL_TABS 7
-#define THEME_COUNT 5
+#define THEME_COUNT 8
 
 #define PI 3.14159265358979323846
 
@@ -37,18 +36,18 @@ typedef struct {
 } BiosTheme;
 
 static const BiosTheme themes[THEME_COUNT] = {
-    // 0: Sakura Pink
+    // 0: Sakura Rose
     {
-        "🌸 Sakura Pink",
-        "\033[38;2;203;166;247m", "\033[48;2;245;194;231m", "\033[38;2;30;30;46m",
+        "🌸 Sakura Rose",
+        "\033[38;2;245;194;231m", "\033[48;2;245;194;231m", "\033[38;2;30;30;46m",
         "\033[48;2;245;194;231m", "\033[1;38;2;30;30;46m",
         "\033[48;2;166;227;161m", "\033[1;38;2;30;30;46m",
         "\033[38;2;245;194;231m", "\033[38;2;166;227;161m", "\033[38;2;137;220;235m",
         "\033[38;2;249;226;175m", "\033[38;2;205;214;244m", "\033[38;2;108;112;134m"
     },
-    // 1: Matcha Mint
+    // 1: Matcha Emerald
     {
-        "🍵 Matcha Mint",
+        "🍵 Matcha Emerald",
         "\033[38;2;166;227;161m", "\033[48;2;166;227;161m", "\033[38;2;24;24;37m",
         "\033[48;2;166;227;161m", "\033[1;38;2;24;24;37m",
         "\033[48;2;249;226;175m", "\033[1;38;2;24;24;37m",
@@ -81,6 +80,33 @@ static const BiosTheme themes[THEME_COUNT] = {
         "\033[48;2;148;226;213m", "\033[1;38;2;17;17;27m",
         "\033[38;2;137;220;235m", "\033[38;2;166;227;161m", "\033[38;2;180;190;254m",
         "\033[38;2;249;226;175m", "\033[38;2;205;214;244m", "\033[38;2;108;112;134m"
+    },
+    // 5: Cyberpunk Neon
+    {
+        "⚡ Cyberpunk Neon",
+        "\033[38;2;250;227;0m", "\033[48;2;250;227;0m", "\033[38;2;10;10;15m",
+        "\033[48;2;250;227;0m", "\033[1;38;2;10;10;15m",
+        "\033[48;2;0;240;255m", "\033[1;38;2;10;10;15m",
+        "\033[38;2;255;0;128m", "\033[38;2;0;255;159m", "\033[38;2;0;240;255m",
+        "\033[38;2;250;227;0m", "\033[38;2;255;255;255m", "\033[38;2;120;120;140m"
+    },
+    // 6: Nord Frost
+    {
+        "❄️ Nord Frost",
+        "\033[38;2;143;188;187m", "\033[48;2;136;192;208m", "\033[38;2;46;52;64m",
+        "\033[48;2;136;192;208m", "\033[1;38;2;46;52;64m",
+        "\033[48;2;163;190;140m", "\033[1;38;2;46;52;64m",
+        "\033[38;2;180;142;173m", "\033[38;2;163;190;140m", "\033[38;2;129;161;193m",
+        "\033[38;2;235;203;139m", "\033[38;2;236;239;244m", "\033[38;2;100;110;125m"
+    },
+    // 7: Blood Crimson
+    {
+        "🩸 Blood Crimson",
+        "\033[38;2;235;77;75m", "\033[48;2;235;77;75m", "\033[38;2;20;20;25m",
+        "\033[48;2;235;77;75m", "\033[1;38;2;20;20;25m",
+        "\033[48;2;240;147;43m", "\033[1;38;2;20;20;25m",
+        "\033[38;2;235;77;75m", "\033[38;2;106;176;76m", "\033[38;2;104;109;224m",
+        "\033[38;2;240;147;43m", "\033[38;2;245;246;250m", "\033[38;2;113;128;147m"
     }
 };
 
@@ -108,9 +134,9 @@ static MenuTab tabs[TOTAL_TABS] = {
     {
         "🖥️", "GUI", 4,
         {
-            {"🪟", "Abrir Monitor Desktop", "gui_desktop_cmd", "Ambiente Grafico com Wallpaper XP", "Abre a area de trabalho virtual com wallpaper matematico XP Bliss e mouse.", "Pressione Enter"},
+            {"🪟", "Abrir Monitor Desktop", "gui_desktop_cmd", "Ambiente Grafico com Wallpaper XP", "Abre a area de trabalho virtual com wallpaper XP Bliss, simulador de mouse e janela flutuante.", "Pressione Enter"},
             {"⚡", "Criar App em C",         "create_c_cmd",    "Gerador & Runner C Nativo",     "Cria um mini-aplicativo em C puro, compila com GCC e executa em janela.", "gcc app.c -O2"},
-            {"🐍", "Criar App em Python",    "create_py_cmd",   "Runner JIT pythont 3.5",        "Escreve e executa script Python nativo com F-Strings e Dicionarios.", "pythont app.py"},
+            {"🐍", "Criar App em Python",    "create_py_cmd",   "Runner pythont 1.0-release",    "Escreve e executa script Python nativo com Lambdas, List Comprehensions e with.", "pythont app.py"},
             {"☕", "Criar App em Java",      "create_java_cmd", "Compilador & Runner Java",      "Cria uma classe Java e executa automaticamente via JDK/JVM.", "javac App.java && java App"}
         }
     },
@@ -130,7 +156,7 @@ static MenuTab tabs[TOTAL_TABS] = {
     {
         "🛠️", "System", 7,
         {
-            {"📝", "tedit",     "./tedit",     "Editor de Codigo & Servidor",  "Editor visual com syntax highlighting, busca, clipboard e servidor web embutido.", "tedit index.html"},
+            {"📝", "tedit",     "./tedit",     "Editor com Web Server Live",   "Editor visual 2.0 com syntax highlighting, desfazer (Ctrl+Z), replace e servidor web (Ctrl+W).", "tedit index.html"},
             {"🌳", "tree",      "./tree",      "Arvore de Pastas e Arquivos",  "Desenha a hierarquia visual de diretorios com permissoes, tamanhos e cores.", "tree -L 2"},
             {"🔍", "ffind",     "./ffind",     "Buscador Recursivo Rapido",    "Localiza arquivos pelo nome ignorando pastas de sistema e arquivos pesados.", "ffind \"main.c\""},
             {"👥", "fdup",      "./fdup",      "Detector de Duplicados",       "Varre diretorios inteiros e encontra copias identicas utilizando hash SHA-256.", "fdup ."},
@@ -169,7 +195,7 @@ static MenuTab tabs[TOTAL_TABS] = {
     {
         "📦", "Low-Utils", 7,
         {
-            {"🐚", "lsh",       "./lsh",       "Shell Unix Inteligente",       "Terminal de comandos com deteccao automatica de ambiente, aliases e pipes.", "lsh"},
+            {"🐚", "lsh",       "./lsh",       "Shell com TAB Autocomplete",   "Terminal 3.0 com autocompletar TAB para comandos/pastas e historico persistente.", "lsh"},
             {"👤", "whoami",    "./whoami",    "Auditoria Completa de Processo","Inspeciona UID, grupos, limites de memoria do kernel, FDs e terminal TTY.", "whoami -uo"},
             {"📂", "ls",        "./ls",        "Listador de Pastas com Inodes","Lista arquivos e pastas com cores semanticas, datas e ordenacao inteligente.", "ls -l"},
             {"📖", "cat",       "./cat",       "Concatenador de Byte Stream",  "Exibe arquivos com formatacao, numeracao de linhas e deteccao de extensao.", "cat -sz low.h"},
@@ -182,9 +208,9 @@ static MenuTab tabs[TOTAL_TABS] = {
     {
         "⚙️", "Setup", 3,
         {
-            {"🎨", "Trocar Tema",    "theme_cmd",   "Alternar Tema de Cores",     "Altera dinamicamente a paleta de cores entre tons pastel kawaii.", "Tecla 'T'"},
-            {"🌸", "Abrir Shell lsh","./lsh",       "Iniciar Terminal lsh",       "Abre uma sessao interativa com o shell nativo lsh.", "lsh"},
-            {"🚪", "Sair do BIOS",   "exit_cmd",    "Encerrar Sessao",            "Fecha o utilitario SYSBOX BIOS e retorna ao terminal.", "ESC / Q"}
+            {"🎨", "Trocar Cor de Teto/Tema","theme_cmd","Alternar Cores do BIOS",    "Altera o teto e tema entre 8 paletas: Sakura, Matcha, Cyberpunk, Nord, etc.", "Tecla 'T'"},
+            {"🌸", "Abrir Shell lsh",      "./lsh",     "Iniciar Terminal lsh",       "Abre uma sessao interativa com o shell nativo lsh 3.0.", "lsh"},
+            {"🚪", "Sair do BIOS",         "exit_cmd",  "Encerrar Sessao",            "Fecha o utilitario SYSBOX BIOS e retorna ao terminal.", "ESC / Q"}
         }
     }
 };
@@ -195,7 +221,7 @@ static int cur_item = 0;
 static int scroll_offset = 0;
 static int keep_running = 1;
 static char custom_args_buf[256] = "";
-static int wallpaper_mode = 0; // 0 = XP Bliss, 1 = Sunset, 2 = Sakura
+static int wallpaper_mode = 0;
 
 static const char *mascots[] = {
     "(づ｡◕‿‿◕｡)づ",
@@ -204,6 +230,14 @@ static const char *mascots[] = {
     "(=^･ω･^=)",
     "⸜(｡˃ ᵕ ˂ )⸝"
 };
+
+static const char *get_tmp_dir(void) {
+    const char *tmp = getenv("TMPDIR");
+    if (tmp && strlen(tmp) > 0 && access(tmp, W_OK) == 0) return tmp;
+    if (access("/data/data/com.termux/files/usr/tmp", W_OK) == 0) return "/data/data/com.termux/files/usr/tmp";
+    if (access("/tmp", W_OK) == 0) return "/tmp";
+    return ".";
+}
 
 static void disable_raw_mode(void) {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_term);
@@ -244,8 +278,7 @@ static void app_runner_flow(int lang_type) {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_term);
     printf("\033[?1049l\033[?25h\033[0m\033[H\033[J");
 
-    const char *tmp = getenv("TMPDIR");
-    if (!tmp || strlen(tmp) == 0) tmp = "/tmp";
+    const char *tmp = get_tmp_dir();
 
     if (lang_type == 0) { // C APP
         printf("\n\033[1;35m╭────────────────────────────────────────────────────────────╮\033[0m\n");
@@ -275,7 +308,7 @@ static void app_runner_flow(int lang_type) {
         (void)!system(cmd);
     } else if (lang_type == 1) { // PYTHON APP
         printf("\n\033[1;35m╭────────────────────────────────────────────────────────────╮\033[0m\n");
-        printf("\033[1;35m│\033[0m  \033[1;32m🐍 RUNNER DE APLICATIVOS PYTHON (pythont 3.5 JIT)\033[0m          \033[1;35m│\033[0m\n");
+        printf("\033[1;35m│\033[0m  \033[1;32m🐍 RUNNER PYTHON (pythont 1.0-release)\033[0m                    \033[1;35m│\033[0m\n");
         printf("\033[1;35m╰────────────────────────────────────────────────────────────╯\033[0m\n\n");
 
         char py_path[512];
@@ -285,11 +318,10 @@ static void app_runner_flow(int lang_type) {
         if (fp) {
             fprintf(fp,
                 "usuario = {'nome': 'Cesar', 'xp': 9999}\n"
-                "print(f'=== Executando Python no Desktop GUI ===')\n"
+                "quadrados = [x * x for x in range(1, 6)]\n"
+                "print(f'=== Executando Python 1.0-release no Desktop ===')\n"
                 "print(f'Player: {usuario[\"nome\"]} | Level XP: {usuario[\"xp\"]}')\n"
-                "numeros = [10, 20, 30, 40]\n"
-                "numeros.append(50)\n"
-                "print(f'Lista com append: {numeros} | Soma: {sum(numeros)}')\n");
+                "print(f'Quadrados (List Comp): {quadrados}')\n");
             fclose(fp);
         }
 
@@ -334,124 +366,131 @@ static void app_runner_flow(int lang_type) {
     enable_raw_mode();
 }
 
-/* =========================================================================
- *  DESKTOP GUI INTERATIVO OTIMIZADO (DIRTY REDRAW + CURSOR)
- * ========================================================================= */
-static void render_desktop_monitor_frame(int box_w, int box_h, int start_x, int start_y, int cursor_item) {
+static void render_desktop_monitor_frame(int box_w, int box_h, int start_x, int start_y, int mouse_sel) {
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);
     char clock_str[32];
     strftime(clock_str, sizeof(clock_str), "%H:%M", tm_info);
 
-    const char *wall_names[] = {"Windows XP Bliss", "Cyber Sunset", "Sakura Pastel"};
+    const char *wall_names[] = {"Windows XP Bliss", "Cyber Sunset", "Sakura Blossom"};
+    const BiosTheme *th = &themes[cur_theme_idx];
 
-    // 1. Borda Superior do Monitor Retrô
-    printf("\033[%d;%dH\033[38;2;137;220;235m╭", start_y, start_x);
+    // 1. Top Border
+    printf("\033[%d;%dH%s╭", start_y, start_x, th->border);
     for (int i = 0; i < box_w - 2; i++) printf("─");
-    printf("╮\033[0m");
+    printf("╮%s", C_RESET);
 
-    // Barra de Título do Monitor
-    printf("\033[%d;%dH\033[38;2;137;220;235m│\033[0m", start_y + 1, start_x);
-    printf("\033[1;37;48;2;36;94;218m 🖥️ VIRTUAL PC MONITOR — [%s] \033[0m%*s",
-           wall_names[wallpaper_mode], (int)(box_w - 36 - strlen(wall_names[wallpaper_mode])), "");
-    printf("\033[%d;%dH\033[38;2;137;220;235m│\033[0m", start_y + 1, start_x + box_w - 1);
+    // Title Bar
+    int title_pad = box_w - 38 - (int)strlen(wall_names[wallpaper_mode]);
+    if (title_pad < 0) title_pad = 0;
+    printf("\033[%d;%dH%s│%s%s%s  🖥️ VIRTUAL PC DESKTOP — [%s]%*s%s%s│%s",
+           start_y + 1, start_x, th->border, C_RESET,
+           th->header_bg, th->header_fg,
+           wall_names[wallpaper_mode], title_pad, "", C_RESET,
+           th->border, C_RESET);
 
     int inner_h = box_h - 4;
     int inner_w = box_w - 2;
 
-    int win_w = 46;
-    int win_h = 10;
+    int win_w = 48;
+    if (win_w > inner_w - 4) win_w = inner_w - 4;
+    if (win_w < 20) win_w = 20;
+
+    int win_h = 9;
     int win_x = (inner_w - win_w) / 2;
     int win_y = (inner_h - win_h) / 2;
 
     const char *app_icons[] = {
-        " [1] ⚡ App em C Nativo (GCC)",
-        " [2] 🐍 Script Python (pythont 3.5)",
-        " [3] ☕ Aplicativo Java (JDK)",
-        " [4] 🎨 Trocar Papel de Parede",
-        " [5] 🚪 Retornar ao BIOS Setup"
+        "⚡ [1] Mini-App em C Nativo (GCC)",
+        "🐍 [2] Script Python (pythont 1.0)",
+        "☕ [3] Aplicativo Java (JDK/JVM)",
+        "🎨 [4] Trocar Fundo de Tela (W)",
+        "🚪 [5] Retornar ao Menu da BIOS"
     };
 
-    // 2. Renderização do Interior da Tela
+    // 2. Renderização sem apagar bordas
     for (int r = 0; r < inner_h; r++) {
         int line_y = start_y + 2 + r;
         double ny = (double)r / (double)inner_h;
 
-        printf("\033[%d;%dH\033[38;2;137;220;235m│\033[0m", line_y, start_x);
+        printf("\033[%d;%dH%s│%s", line_y, start_x, th->border, C_RESET);
 
-        // Se estiver fora da janela flutuante, desenha o Wallpaper
-        int is_in_window = (r >= win_y && r < win_y + win_h);
+        int is_in_window = (r >= win_y && r < win_y + win_h && inner_w > 26);
 
         if (!is_in_window) {
             if (wallpaper_mode == 0) { // XP Bliss
-                double hill_y = 0.55 + 0.12 * sin((double)r * 0.4);
+                double hill_y = 0.52 + 0.14 * sin(r * 0.35 + 0.4);
                 if (ny < hill_y) {
-                    // Céu Azul
-                    printf("\033[48;2;60;140;230m%*s\033[0m", inner_w, "");
+                    printf("\033[48;2;58;134;255m%*s\033[0m", inner_w, "");
                 } else {
-                    // Colina Verde
-                    printf("\033[48;2;76;175;80m%*s\033[0m", inner_w, "");
+                    printf("\033[48;2;56;161;105m%*s\033[0m", inner_w, "");
                 }
-            } else if (wallpaper_mode == 1) { // Sunset
-                printf("\033[48;2;180;60;120m%*s\033[0m", inner_w, "");
-            } else { // Sakura
+            } else if (wallpaper_mode == 1) { // Cyber Sunset
+                if (ny < 0.6) printf("\033[48;2;131;56;236m%*s\033[0m", inner_w, "");
+                else printf("\033[48;2;255;0;110m%*s\033[0m", inner_w, "");
+            } else { // Sakura Blossom
                 printf("\033[48;2;245;194;231m%*s\033[0m", inner_w, "");
             }
         } else {
-            // Desenha o fundo antes da janela
-            if (wallpaper_mode == 0) printf("\033[48;2;60;140;230m%*s\033[0m", win_x, "");
-            else printf("\033[48;2;180;60;120m%*s\033[0m", win_x, "");
+            if (wallpaper_mode == 0) printf("\033[48;2;58;134;255m%*s\033[0m", win_x, "");
+            else if (wallpaper_mode == 1) printf("\033[48;2;131;56;236m%*s\033[0m", win_x, "");
+            else printf("\033[48;2;245;194;231m%*s\033[0m", win_x, "");
 
-            // Conteúdo da Janela Estilo XP
             int win_row = r - win_y;
             if (win_row == 0) {
-                // Barra de título XP
-                printf("\033[1;37;48;2;36;94;218m 🪟 Windows XP Studio [ _ ] [ × ] \033[0m%*s", (int)(win_w - 33), "");
+                int pad = win_w - 32; if (pad < 0) pad = 0;
+                printf("\033[1;37;48;2;36;94;218m 🪟 Windows Studio [ _ ] [ × ]%*s\033[0m", pad, "");
             } else if (win_row == 1) {
-                printf("\033[1;30;48;2;240;242;245m Escolha o aplicativo ou ambiente: %*s\033[0m", (int)(win_w - 36), "");
+                int pad = win_w - 28; if (pad < 0) pad = 0;
+                printf("\033[1;30;48;2;240;242;245m Escolha o aplicativo:%*s\033[0m", pad, "");
             } else if (win_row >= 3 && win_row <= 7) {
                 int item_idx = win_row - 3;
-                int is_sel = (item_idx == cursor_item);
+                int is_sel = (item_idx == mouse_sel);
+                int pad = win_w - 42; if (pad < 0) pad = 0;
 
                 if (is_sel) {
-                    printf("\033[1;30;48;2;166;227;161m 🖰 %-38.38s ◄\033[0m", app_icons[item_idx]);
+                    printf("\033[1;30;48;2;166;227;161m 🖰 %-36.36s ◄\033[0m%*s", app_icons[item_idx], pad, "");
                 } else {
-                    printf("\033[0;30;48;2;240;242;245m   %-39.39s\033[0m", app_icons[item_idx]);
+                    printf("\033[0;30;48;2;240;242;245m   %-37.37s\033[0m%*s", app_icons[item_idx], pad, "");
                 }
-                int rem_w = win_w - 42;
-                if (rem_w > 0) printf("\033[48;2;240;242;245m%*s\033[0m", rem_w, "");
             } else {
                 printf("\033[48;2;240;242;245m%*s\033[0m", win_w, "");
             }
 
-            // Fundo depois da janela
             int right_rem = inner_w - win_x - win_w;
             if (right_rem > 0) {
-                if (wallpaper_mode == 0) printf("\033[48;2;60;140;230m%*s\033[0m", right_rem, "");
-                else printf("\033[48;2;180;60;120m%*s\033[0m", right_rem, "");
+                if (wallpaper_mode == 0) printf("\033[48;2;58;134;255m%*s\033[0m", right_rem, "");
+                else if (wallpaper_mode == 1) printf("\033[48;2;131;56;236m%*s\033[0m", right_rem, "");
+                else printf("\033[48;2;245;194;231m%*s\033[0m", right_rem, "");
             }
         }
 
-        printf("\033[%d;%dH\033[38;2;137;220;235m│\033[0m", line_y, start_x + box_w - 1);
+        printf("\033[%d;%dH%s│%s", line_y, start_x + box_w - 1, th->border, C_RESET);
     }
 
-    // 3. Barra de Tarefas XP no Fundo do Monitor
-    printf("\033[%d;%dH\033[38;2;137;220;235m│\033[0m", start_y + inner_h + 2, start_x);
-    printf("\033[1;37;48;2;36;94;218m 🌸 Iniciar \033[0m\033[1;37;48;2;24;60;160m [ W: Trocar Fundo ] \033[0m%*s\033[1;37;48;2;20;50;140m 🕒 %s \033[0m",
-           (int)(inner_w - 38), "", clock_str);
-    printf("\033[%d;%dH\033[38;2;137;220;235m│\033[0m", start_y + inner_h + 2, start_x + box_w - 1);
+    // 3. Taskbar
+    int taskbar_y = start_y + inner_h + 2;
+    int task_pad = inner_w - 38;
+    if (task_pad < 0) task_pad = 0;
 
-    // Borda Inferior
-    printf("\033[%d;%dH\033[38;2;137;220;235m╰", start_y + inner_h + 3, start_x);
+    printf("\033[%d;%dH%s│%s", taskbar_y, start_x, th->border, C_RESET);
+    printf("\033[1;37;48;2;36;94;218m 🌸 Iniciar \033[0m\033[1;37;48;2;24;60;160m [ W: Trocar Fundo ] \033[0m%*s\033[1;37;48;2;20;50;140m 🕒 %s \033[0m",
+           task_pad, "", clock_str);
+    printf("\033[%d;%dH%s│%s", taskbar_y, start_x + box_w - 1, th->border, C_RESET);
+
+    // Bottom Border
+    printf("\033[%d;%dH%s╰", taskbar_y + 1, start_x, th->border);
     for (int i = 0; i < box_w - 2; i++) printf("─");
-    printf("╯\033[0m");
+    printf("╯%s", C_RESET);
 
     fflush(stdout);
 }
 
 static void run_desktop_gui(void) {
     int gui_running = 1;
-    int cursor_item = 0; // 0..4
+    int mouse_sel = 0;
+
+    printf("\033[H\033[J");
 
     while (gui_running) {
         int cols, rows;
@@ -459,23 +498,23 @@ static void run_desktop_gui(void) {
 
         int box_w = cols - 2;
         if (box_w > 96) box_w = 96;
-        if (box_w < 64) box_w = 64;
+        if (box_w < 50) box_w = 50;
 
         int box_h = rows - 2;
         if (box_h > 26) box_h = 26;
-        if (box_h < 18) box_h = 18;
+        if (box_h < 16) box_h = 16;
 
         int start_x = (cols - box_w) / 2;
         if (start_x < 1) start_x = 1;
         int start_y = (rows - box_h) / 2;
         if (start_y < 1) start_y = 1;
 
-        render_desktop_monitor_frame(box_w, box_h, start_x, start_y, cursor_item);
+        render_desktop_monitor_frame(box_w, box_h, start_x, start_y, mouse_sel);
 
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(STDIN_FILENO, &fds);
-        struct timeval tv = { .tv_sec = 1, .tv_usec = 0 }; // Atualiza a cada 1s apenas para o relógio
+        struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
 
         if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
             char seq[8];
@@ -483,35 +522,44 @@ static void run_desktop_gui(void) {
             if (n <= 0) break;
             char c = seq[0];
 
-            if (c == 'q' || c == 'Q' || c == 27) {
+            if (c == 'q' || c == 'Q') {
+                gui_running = 0;
+                break;
+            }
+
+            if (c == 27) {
                 if (n == 1) { gui_running = 0; break; }
                 if (n >= 3 && seq[1] == '[') {
                     if (seq[2] == 'A') { // Seta CIMA
-                        if (cursor_item > 0) cursor_item--;
-                        else cursor_item = 4;
+                        if (mouse_sel > 0) mouse_sel--;
+                        else mouse_sel = 4;
                     } else if (seq[2] == 'B') { // Seta BAIXO
-                        if (cursor_item < 4) cursor_item++;
-                        else cursor_item = 0;
+                        if (mouse_sel < 4) mouse_sel++;
+                        else mouse_sel = 0;
                     }
                 }
             } else if (c == 'w' || c == 'W') {
                 wallpaper_mode = (wallpaper_mode + 1) % 3;
             } else if (c == '1') {
                 app_runner_flow(0);
+                printf("\033[H\033[J");
             } else if (c == '2') {
                 app_runner_flow(1);
+                printf("\033[H\033[J");
             } else if (c == '3') {
                 app_runner_flow(2);
+                printf("\033[H\033[J");
             } else if (c == '4') {
                 wallpaper_mode = (wallpaper_mode + 1) % 3;
             } else if (c == '5') {
                 gui_running = 0;
             } else if (c == '\r' || c == '\n' || c == ' ') {
-                if (cursor_item == 0) app_runner_flow(0);
-                else if (cursor_item == 1) app_runner_flow(1);
-                else if (cursor_item == 2) app_runner_flow(2);
-                else if (cursor_item == 3) wallpaper_mode = (wallpaper_mode + 1) % 3;
-                else if (cursor_item == 4) gui_running = 0;
+                if (mouse_sel == 0) app_runner_flow(0);
+                else if (mouse_sel == 1) app_runner_flow(1);
+                else if (mouse_sel == 2) app_runner_flow(2);
+                else if (mouse_sel == 3) wallpaper_mode = (wallpaper_mode + 1) % 3;
+                else if (mouse_sel == 4) gui_running = 0;
+                printf("\033[H\033[J");
             }
         }
     }
@@ -528,18 +576,22 @@ static void launch_tool(const char *cmd, const char *args) {
     }
     if (strcmp(cmd, "gui_desktop_cmd") == 0) {
         run_desktop_gui();
+        printf("\033[H\033[J");
         return;
     }
     if (strcmp(cmd, "create_c_cmd") == 0) {
         app_runner_flow(0);
+        printf("\033[H\033[J");
         return;
     }
     if (strcmp(cmd, "create_py_cmd") == 0) {
         app_runner_flow(1);
+        printf("\033[H\033[J");
         return;
     }
     if (strcmp(cmd, "create_java_cmd") == 0) {
         app_runner_flow(2);
+        printf("\033[H\033[J");
         return;
     }
 
@@ -570,6 +622,7 @@ static void launch_tool(const char *cmd, const char *args) {
     if (read(STDIN_FILENO, buf, sizeof(buf)) <= 0) {}
 
     enable_raw_mode();
+    printf("\033[H\033[J");
 }
 
 static void prompt_custom_arguments(void) {
@@ -671,11 +724,11 @@ static void render_bios_setup(void) {
 
     int box_w = term_cols - 2;
     if (box_w > 98) box_w = 98;
-    if (box_w < 66) box_w = 66;
+    if (box_w < 56) box_w = 56;
 
     int box_h = term_rows - 2;
     if (box_h > 28) box_h = 28;
-    if (box_h < 19) box_h = 19;
+    if (box_h < 18) box_h = 18;
 
     int start_x = (term_cols - box_w) / 2;
     if (start_x < 1) start_x = 1;
@@ -691,34 +744,42 @@ static void render_bios_setup(void) {
     memset(&ipc_data, 0, sizeof(ipc_data));
     utilipc_read_status(&ipc_data);
 
-    // 1. TOPO: Borda Superior
+    // 1. Top Border
     printf("\033[%d;%dH%s╭", start_y, start_x, th->border);
     for (int i = 0; i < box_w - 2; i++) printf("─");
     printf("╮%s", C_RESET);
 
-    // Linha do Título Principal
-    printf("\033[%d;%dH%s│%s", start_y + 1, start_x, th->border, C_RESET);
-    printf("%s%s  🌸 SYSBOX BIOS SETUP UTILITY — v5.5 ✨  [%s]    [%s]%s",
-           th->header_bg, th->header_fg, th->theme_name, time_str, C_RESET);
-    printf("\033[%d;%dH%s│%s", start_y + 1, start_x + box_w - 1, th->border, C_RESET);
+    // Title Bar
+    int head_pad = box_w - 38 - (int)strlen(th->theme_name);
+    if (head_pad < 0) head_pad = 0;
+    printf("\033[%d;%dH%s│%s%s%s  🌸 SYSBOX BIOS SETUP — v6.0 ✨  [%s]    [%s]%*s%s%s│%s",
+           start_y + 1, start_x, th->border, C_RESET,
+           th->header_bg, th->header_fg,
+           th->theme_name, time_str, head_pad, "", C_RESET,
+           th->border, C_RESET);
 
-    // 2. LINHA DE ABAS (Tabs)
+    // 2. Abas
     printf("\033[%d;%dH%s│%s  ", start_y + 2, start_x, th->border, C_RESET);
+    int tabs_rendered_w = 2;
     for (int t = 0; t < TOTAL_TABS; t++) {
         if (t == cur_tab) {
-            printf("%s%s %s %-7s %s  ", th->tab_sel_bg, th->tab_sel_fg, tabs[t].tab_icon, tabs[t].tab_name, C_RESET);
+            printf("%s%s %s %-6s %s ", th->tab_sel_bg, th->tab_sel_fg, tabs[t].tab_icon, tabs[t].tab_name, C_RESET);
+            tabs_rendered_w += 12;
         } else {
-            printf("%s %s %-7s %s  ", th->accent_sky, tabs[t].tab_icon, tabs[t].tab_name, C_RESET);
+            printf("%s %s %-6s %s ", th->accent_sky, tabs[t].tab_icon, tabs[t].tab_name, C_RESET);
+            tabs_rendered_w += 12;
         }
     }
+    int tab_rem = box_w - 2 - tabs_rendered_w;
+    if (tab_rem > 0) printf("%*s", tab_rem, "");
     printf("\033[%d;%dH%s│%s", start_y + 2, start_x + box_w - 1, th->border, C_RESET);
 
-    // Divisória horizontal
+    // Divisória
     printf("\033[%d;%dH%s├", start_y + 3, start_x, th->border);
     for (int i = 0; i < box_w - 2; i++) printf("─");
     printf("┤%s", C_RESET);
 
-    // 3. CORPO CENTRAL: 2 Colunas
+    // 3. Colunas
     int split_x = (box_w * 44) / 100;
     int body_h = box_h - 6;
     int visible_items = body_h - 2;
@@ -744,7 +805,7 @@ static void render_bios_setup(void) {
                box_w - split_x - 2, "",
                C_RESET);
 
-        // --- COLUNA ESQUERDA ---
+        // Esquerda
         if (r == 0 && scroll_offset > 0) {
             printf("\033[%d;%dH%s   ▲ Mais itens acima...%s", line_y, start_x + 2, th->accent_peach, C_RESET);
         } else if (r == visible_items + 1 && (scroll_offset + visible_items < tab->item_count)) {
@@ -767,7 +828,7 @@ static void render_bios_setup(void) {
             }
         }
 
-        // --- COLUNA DIREITA ---
+        // Direita
         int right_start_x = start_x + split_x + 2;
         printf("\033[%d;%dH", line_y, right_start_x);
 
@@ -819,15 +880,18 @@ static void render_bios_setup(void) {
         }
     }
 
-    // 4. RODAPÉ DE NAVEGAÇÃO
+    // 4. Rodapé
     printf("\033[%d;%dH%s├", start_y + 4 + body_h, start_x, th->border);
     for (int i = 0; i < box_w - 2; i++) printf("─");
     printf("┤%s", C_RESET);
 
-    printf("\033[%d;%dH%s│%s", start_y + 5 + body_h, start_x, th->border, C_RESET);
-    printf("%s%s  [←/→/TAB] Abas | [↑/↓] Rolar Lista | [Enter] Rodar | ['A'] Args | ['T'] Tema | [Q] Sair %s",
-           th->header_bg, th->header_fg, C_RESET);
-    printf("\033[%d;%dH%s│%s", start_y + 5 + body_h, start_x + box_w - 1, th->border, C_RESET);
+    int foot_pad = box_w - 74;
+    if (foot_pad < 0) foot_pad = 0;
+
+    printf("\033[%d;%dH%s│%s%s%s  [←/→/TAB] Abas | [↑/↓] Rolar | [Enter] Rodar | ['A'] Args | ['T'] Tema | [Q] Sair %*s%s%s│%s",
+           start_y + 5 + body_h, start_x, th->border, C_RESET,
+           th->header_bg, th->header_fg, foot_pad, "", C_RESET,
+           th->border, C_RESET);
 
     printf("\033[%d;%dH%s╰", start_y + 6 + body_h, start_x, th->border);
     for (int i = 0; i < box_w - 2; i++) printf("─");
@@ -840,13 +904,15 @@ int main(void) {
     utilipc_init();
     enable_raw_mode();
 
+    printf("\033[H\033[J");
+
     while (keep_running) {
         render_bios_setup();
 
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(STDIN_FILENO, &fds);
-        struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 };
+        struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
 
         if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
             char seq[8];
@@ -861,11 +927,13 @@ int main(void) {
 
             if (c == 't' || c == 'T') {
                 cur_theme_idx = (cur_theme_idx + 1) % THEME_COUNT;
+                printf("\033[H\033[J");
                 continue;
             }
 
             if (c == 'a' || c == 'A') {
                 prompt_custom_arguments();
+                printf("\033[H\033[J");
                 continue;
             }
 
@@ -873,6 +941,7 @@ int main(void) {
                 cur_tab = (cur_tab + 1) % TOTAL_TABS;
                 cur_item = 0;
                 scroll_offset = 0;
+                printf("\033[H\033[J");
                 continue;
             }
 
@@ -881,13 +950,13 @@ int main(void) {
                 continue;
             }
 
-            // Sequência de Escape / Setas do Teclado
             if (c == 27) {
-                if (n == 1) { // Tecla ESC sozinha
+                if (n == 1) {
                     if (cur_tab != TOTAL_TABS - 1) {
                         cur_tab = TOTAL_TABS - 1;
                         cur_item = 0;
                         scroll_offset = 0;
+                        printf("\033[H\033[J");
                     } else {
                         break;
                     }
@@ -895,25 +964,22 @@ int main(void) {
                 }
 
                 if (n >= 3 && seq[1] == '[') {
-                    if (seq[2] == 'A') { // Seta CIMA
+                    if (seq[2] == 'A') { // Cima
                         if (cur_item > 0) cur_item--;
-                        else {
-                            cur_item = tabs[cur_tab].item_count - 1;
-                        }
-                    } else if (seq[2] == 'B') { // Seta BAIXO
+                        else cur_item = tabs[cur_tab].item_count - 1;
+                    } else if (seq[2] == 'B') { // Baixo
                         if (cur_item + 1 < tabs[cur_tab].item_count) cur_item++;
-                        else {
-                            cur_item = 0;
-                            scroll_offset = 0;
-                        }
-                    } else if (seq[2] == 'C') { // Seta DIREITA
+                        else { cur_item = 0; scroll_offset = 0; }
+                    } else if (seq[2] == 'C') { // Direita
                         cur_tab = (cur_tab + 1) % TOTAL_TABS;
                         cur_item = 0;
                         scroll_offset = 0;
-                    } else if (seq[2] == 'D') { // Seta ESQUERDA
+                        printf("\033[H\033[J");
+                    } else if (seq[2] == 'D') { // Esquerda
                         cur_tab = (cur_tab - 1 + TOTAL_TABS) % TOTAL_TABS;
                         cur_item = 0;
                         scroll_offset = 0;
+                        printf("\033[H\033[J");
                     }
                 }
             }
