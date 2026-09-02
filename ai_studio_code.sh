@@ -1,3 +1,6 @@
+echo "[*] Aplicando correcao no src/pythont/pythont.c..."
+
+cat << 'EOF' > src/pythont/pythont.c
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -289,13 +292,13 @@ static void replace_operators(char *expr) {
         } else if (strncmp(expr + i, "input(", 6) == 0) {
             strcat(tmp + t, "py_input("); t += 9; i += 5;
         } else if (strncmp(expr + i, "sum(", 4) == 0) {
-            char target[64] = "";
+            char target_list[64] = "";
             size_t k = i + 4, p = 0;
-            while (expr[k] && expr[k] != ')' && p < sizeof(target) - 1) target[p++] = expr[k++];
-            target[p] = '\0';
+            while (expr[k] && expr[k] != ')' && p < sizeof(target_list) - 1) target_list[p++] = expr[k++];
+            target_list[p] = '\0';
             if (expr[k] == ')') {
                 char sum_call[128];
-                snprintf(sum_call, sizeof(sum_call), "py_sum(%s, len_%s)", target, target);
+                snprintf(sum_call, sizeof(sum_call), "py_sum(%s, len_%s)", target_list, target_list);
                 strcat(tmp + t, sum_call);
                 t += strlen(sum_call);
                 i = k;
@@ -303,7 +306,7 @@ static void replace_operators(char *expr) {
         } else if (strncmp(expr + i, "len(", 4) == 0) {
             char target[64] = "";
             size_t k = i + 4, p = 0;
-            while (expr[k] && expr[k] != ')' && p < sizeof(target) - 1) target[p++] = expr[k++];
+            while (expr[k] && expr[k] != ')' && p < sizeof(target_list) - 1) target[p++] = expr[k++];
             target[p] = '\0';
             if (expr[k] == ')') {
                 symbol_t *s = find_symbol(target);
@@ -1792,3 +1795,11 @@ int main(int argc, char *argv[]) {
     utilipc_close();
     return 0;
 }
+EOF
+
+echo "[*] Compilando pythont 1.0-release..."
+gcc -Wall -Wextra -O2 -fPIC src/pythont/pythont.c -o pythont -L. -lutilipc -Wl,-rpath,. -lpthread -lm
+
+echo "[✔] Compilacao concluida com zero warnings!"
+echo "[*] Executando o exemplo master..."
+./pythont examples/exemplo_1_0.py

@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <errno.h>
-#include "../libutilipc/utilipc.h"
+#include "libutilipc/utilipc.h"
 
 #define MAX_CODE_SZ   (1024 * 1024)
 #define MAX_VARS      512
