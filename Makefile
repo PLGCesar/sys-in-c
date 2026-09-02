@@ -1,4 +1,3 @@
-
 PREFIX ?= /usr/local
 CC ?= gcc
 CFLAGS ?= -Wall -Wextra -O2 -fPIC
@@ -46,8 +45,8 @@ ffind: src/ffind/ffind.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/ffind/ffind.c -o ffind $(LDFLAGS_IPC)
 ipcmon: src/ipcmon/ipcmon.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/ipcmon/ipcmon.c -o ipcmon $(LDFLAGS_IPC)
-simplehost: src/simplehost/simplehost.c $(LIB_IPC)
-	$(CC) $(CFLAGS) src/simplehost/simplehost.c -o simplehost $(LDFLAGS_IPC)
+simplehost: src/simplehost/simplehost.c src/simplehost/http_pages.c src/simplehost/security.c src/simplehost/server.h $(LIB_IPC)
+	$(CC) $(CFLAGS) src/simplehost/simplehost.c src/simplehost/http_pages.c src/simplehost/security.c -o simplehost $(LDFLAGS_IPC)
 watchcmd: src/watchcmd/watchcmd.c $(LIB_IPC)
 	$(CC) $(CFLAGS) src/watchcmd/watchcmd.c -o watchcmd $(LDFLAGS_IPC)
 strutils: src/strutils/strutils.c $(LIB_IPC)
