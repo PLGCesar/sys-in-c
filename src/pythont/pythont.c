@@ -316,7 +316,7 @@ static void transform_advanced_expressions(char *expr) {
 
             symbol_t *sym = find_symbol(ident);
 
-            // Métodos de String: str.upper(), str.lower(), str.replace(...)
+            // Métodos de String
             if (expr[i] == '.' && (strncmp(expr + i, ".upper()", 8) == 0)) {
                 i += 8;
                 char call[256];
@@ -349,7 +349,7 @@ static void transform_advanced_expressions(char *expr) {
                 continue;
             }
 
-            // Chamada de método de objeto: obj.metodo(args)
+            // Métodos de Objeto
             if (sym && sym->type == VAR_OBJ && expr[i] == '.') {
                 i++;
                 char method_name[64] = "";
@@ -394,7 +394,7 @@ static void transform_advanced_expressions(char *expr) {
                 }
             }
 
-            // Leitura de Arquivo: f.read()
+            // Leitura de Arquivo
             if (sym && sym->type == VAR_FILE && strncmp(expr + i, ".read()", 7) == 0) {
                 i += 7;
                 char call[256];
@@ -404,7 +404,7 @@ static void transform_advanced_expressions(char *expr) {
                 continue;
             }
 
-            // Acesso a Dicionário: dict["chave"]
+            // Acesso a Dicionário
             if (sym && sym->type == VAR_DICT && expr[i] == '[') {
                 i++;
                 char key_str[128] = "";
@@ -425,7 +425,7 @@ static void transform_advanced_expressions(char *expr) {
                 continue;
             }
 
-            // Slicing de String: texto[start:end]
+            // Slicing de String
             if (sym && sym->type == VAR_STR && expr[i] == '[') {
                 size_t look = i + 1;
                 int has_colon = 0;
@@ -533,7 +533,7 @@ static void transpile_fstring(const char *fstr, char *out_fmt, char *out_args) {
                          strstr(trim_e, "py_dict_get_val") || strstr(trim_e, "py_str_slice") ||
                          strstr(trim_e, "py_str_upper") || strstr(trim_e, "py_str_lower") ||
                          strstr(trim_e, "py_str_replace") || strstr(trim_e, "py_file_read") ||
-                         strstr(trim_e, ".nome");
+                         strstr(trim_e, ".nome") || strstr(trim_e, ".especie");
 
             int is_flt = (sym && sym->type == VAR_FLOAT) ||
                          (dot_pos && isdigit((unsigned char)*(dot_pos + 1))) ||
@@ -648,7 +648,7 @@ static void transpile_print(const char *args_str) {
                      strstr(t, "py_dict_get_val") || strstr(t, "py_str_slice") ||
                      strstr(t, "py_str_upper") || strstr(t, "py_str_lower") ||
                      strstr(t, "py_str_replace") || strstr(t, "py_file_read") ||
-                     strstr(t, ".nome");
+                     strstr(t, ".nome") || strstr(t, ".especie");
 
         int is_flt = (sym && sym->type == VAR_FLOAT) ||
                      (dot_pos && isdigit((unsigned char)*(dot_pos + 1))) ||
@@ -747,6 +747,7 @@ static void transpile_line(char *line, int indent) {
 
         emit_class_struct("\ntypedef struct %s {\n", cname);
         emit_class_struct("    const char *nome;\n");
+        emit_class_struct("    const char *especie;\n");
         emit_class_struct("    int64_t vida;\n");
         emit_class_struct("    int64_t forca;\n");
         emit_class_struct("    int64_t xp;\n");
@@ -1083,7 +1084,7 @@ static void transpile_line(char *line, int indent) {
             }
         }
 
-        // Modificação de chave de dicionário: dict["key"] = val
+        // Modificação de chave de dicionário ou índice de lista: dict["key"] = val OU lista[i] = val
         char *bracket_in_lhs = strchr(vstart, '[');
         if (bracket_in_lhs) {
             *bracket_in_lhs = '\0';
@@ -1103,6 +1104,11 @@ static void transpile_line(char *line, int indent) {
                 } else {
                     emit("    py_dict_set_int(&%s, %s, %s);\n", vstart, d_key, vexpr_start);
                 }
+                return;
+            } else if (dsym && dsym->type == VAR_LIST) {
+                replace_operators(vexpr_start);
+                transform_advanced_expressions(vexpr_start);
+                emit("    %s[%s] = (int64_t)(%s);\n", vstart, d_key, vexpr_start);
                 return;
             }
         }
